@@ -180,7 +180,7 @@ local _mmaLaggerStroke = nil
 
 function refreshMmaLaggerUI()
     if _mmaLaggerStatusLbl then
-        _mmaLaggerStatusLbl.Text = mmaServerLaggerEnabled and "STATUS  Â·  ACTIVE" or "STATUS  Â·  IDLE"
+        _mmaLaggerStatusLbl.Text = mmaServerLaggerEnabled and "STATUS  ·  ACTIVE" or "STATUS  ·  IDLE"
         _mmaLaggerStatusLbl.TextColor3 = mmaServerLaggerEnabled and Color3.fromRGB(120, 255, 160) or Color3.fromRGB(160, 160, 170)
     end
     if _mmaLaggerMainBtn then
@@ -265,7 +265,7 @@ openMmaLaggerPanel = function()
     closeBtn.Size = UDim2.new(0, 28, 0, 28)
     closeBtn.Position = UDim2.new(1, -34, 0, 10)
     closeBtn.BackgroundTransparency = 1
-    closeBtn.Text = "âœ•"
+    closeBtn.Text = "✕"
     closeBtn.Font = Enum.Font.GothamBold
     closeBtn.TextSize = 14
     closeBtn.TextColor3 = Color3.fromRGB(160, 160, 170)
@@ -277,7 +277,7 @@ openMmaLaggerPanel = function()
     status.Size = UDim2.new(1, -28, 0, 18)
     status.Position = UDim2.new(0, 14, 0, 44)
     status.BackgroundTransparency = 1
-    status.Text = "STATUS  Â·  IDLE"
+    status.Text = "STATUS  ·  IDLE"
     status.Font = Enum.Font.GothamMedium
     status.TextSize = 11
     status.TextColor3 = Color3.fromRGB(160, 160, 170)
@@ -288,7 +288,7 @@ openMmaLaggerPanel = function()
     sub.Size = UDim2.new(1, -28, 0, 16)
     sub.Position = UDim2.new(0, 14, 0, 64)
     sub.BackgroundTransparency = 1
-    sub.Text = "Medium power  Â·  pulse 0.5s"
+    sub.Text = "Medium power  ·  pulse 0.5s"
     sub.Font = Enum.Font.Gotham
     sub.TextSize = 10
     sub.TextColor3 = Color3.fromRGB(100, 100, 110)
@@ -380,6 +380,19 @@ local perButtonDragEnabled=false
 local brainrotDetected=false
 local activeBatBillboard=nil
 local activeMedusaBillboard=nil
+-- Noxa-style TP Bat settings (keeps MMA's existing public function names)
+local tpBatVersion="V1"
+local tpBatCameraLock=false
+local tpBatSwingCooldown=0.12
+local tpBatAutoDisableOnHit=false
+-- E01 carry warning state
+local e01Enabled=true
+local e01WasCarrying=false
+local e01ScanConn=nil
+local e01CountdownConn=nil
+local e01Billboard=nil
+local e01SetVisual=nil
+local setE01Enabled,startE01Watch,stopE01Watch
 local ragdollGuiEnabled=true
 local persistentRagdollGui=nil
 local uiLocked=true
@@ -776,7 +789,7 @@ function stopAntiDrop()
 end
 
 function syncAutoAntiDrop()
-    -- Anti Drop ALWAYS on (automatic) â€” prevents brainrot drop detection
+    -- Anti Drop ALWAYS on (automatic) — prevents brainrot drop detection
     antiDropEnabled = true
     startAntiDrop()
 end
@@ -833,7 +846,7 @@ function startHoldInfJump()
 end
 
 function stopHoldInfJump()
-    -- ONLY called when user turns OFF â€” do not call on death/cleanup
+    -- ONLY called when user turns OFF — do not call on death/cleanup
     -- (no-op connection clear kept for compatibility)
     if holdInfJumpConn then
         pcall(function() holdInfJumpConn:Disconnect() end)
@@ -1770,7 +1783,7 @@ local aimbotConn=nil
 local BAT_AIMBOT_SPEED=58
 local findBat, getClosestTarget, swingCurrentBat
 ;(function()
--- â”€â”€ Bat Aimbot (Envy logic) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+-- ── Bat Aimbot (Envy logic) ───────────────────────────────────────────────
 local _predBall=nil
 findBat = function()
     local char=LP.Character;if not char then return nil end
@@ -1955,36 +1968,42 @@ tpBatSetVisual=nil
         charConn = nil,
     }
 
+    -- Noxa-compatible melee lookup: prefer bat/slap, then support other
+    -- melee tools used by variants of the game without stealing unrelated tools.
     local function voidFindBat()
         local char = LP.Character
         if not char then return nil end
+        local function isMelee(tool)
+            if not tool or not tool:IsA("Tool") then return false end
+            local n = tool.Name:lower()
+            return n:find("bat") or n:find("slap") or n:find("sword")
+                or n:find("knife") or n:find("blade") or n:find("mace")
+                or tool:FindFirstChildWhichIsA("RemoteEvent") ~= nil
+                or tool:FindFirstChild("Activate") ~= nil
+        end
         local tool = char:FindFirstChild("Bat")
-        if tool and tool:IsA("Tool") then return tool end
+        if isMelee(tool) then return tool end
         local bp = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
         if bp then
             tool = bp:FindFirstChild("Bat")
-            if tool and tool:IsA("Tool") then return tool end
+            if isMelee(tool) then return tool end
         end
         if type(BAT_COUNTER_SLAP_LIST) == "table" then
             for _, name in ipairs(BAT_COUNTER_SLAP_LIST) do
                 tool = char:FindFirstChild(name)
-                if tool and tool:IsA("Tool") then return tool end
+                if isMelee(tool) then return tool end
                 if bp then
                     tool = bp:FindFirstChild(name)
-                    if tool and tool:IsA("Tool") then return tool end
+                    if isMelee(tool) then return tool end
                 end
             end
         end
         for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Tool") and (child.Name:lower():find("bat") or child.Name:lower():find("slap")) then
-                return child
-            end
+            if isMelee(child) then return child end
         end
         if bp then
             for _, child in ipairs(bp:GetChildren()) do
-                if child:IsA("Tool") and (child.Name:lower():find("bat") or child.Name:lower():find("slap")) then
-                    return child
-                end
+                if isMelee(child) then return child end
             end
         end
         return nil
@@ -2023,16 +2042,16 @@ tpBatSetVisual=nil
             if bat.Parent ~= char and hum then
                 pcall(function() hum:EquipTool(bat) end)
             end
-            for _ = 1, 3 do
-                pcall(function() bat:Activate() end)
-                local ev = bat:FindFirstChildWhichIsA("RemoteEvent")
-                if ev then pcall(function() ev:FireServer() end) end
-                for _, d in ipairs(bat:GetDescendants()) do
-                    if d:IsA("RemoteEvent") then pcall(function() d:FireServer() end) end
-                end
+            pcall(function() bat:Activate() end)
+            local ev = bat:FindFirstChildWhichIsA("RemoteEvent")
+            if ev then pcall(function() ev:FireServer() end) end
+            for _, d in ipairs(bat:GetDescendants()) do
+                if d:IsA("RemoteEvent") then pcall(function() d:FireServer() end) end
             end
         end)
-        task.delay(0.03, function() _voidTp.hitCD = false end)
+        task.delay(math.max(0.04, tonumber(tpBatSwingCooldown) or 0.12), function()
+            _voidTp.hitCD = false
+        end)
     end
 
     local function voidStopAntiDie()
@@ -2091,7 +2110,11 @@ tpBatSetVisual=nil
             end
 
             local locked = _voidTp.lockedRoot
-            if not locked or not locked.Parent or not locked.Parent.Parent then
+            if tpBatVersion == "V2" then
+                -- V2 follows the nearest live target every frame, like Noxa V2.
+                locked = voidClosestRoot()
+                _voidTp.lockedRoot = locked
+            elseif not locked or not locked.Parent or not locked.Parent.Parent then
                 locked = voidClosestRoot()
                 _voidTp.lockedRoot = locked
             else
@@ -2108,16 +2131,30 @@ tpBatSetVisual=nil
                 end
 
                 local vel = locked.AssemblyLinearVelocity or Vector3.zero
-                local pred = locked.Position + vel * 0.05 + Vector3.new(0, 0.35, 0)
-                local aimPos = pred + Vector3.new(0, 0.2, 0)
-                local look = Vector3.new(vel.X, 0, vel.Z)
-                if look.Magnitude < 0.15 then
-                    look = Vector3.new(locked.Position.X - hrp.Position.X, 0, locked.Position.Z - hrp.Position.Z)
-                end
-                if look.Magnitude > 0.05 then
-                    hrp.CFrame = CFrame.lookAt(aimPos, aimPos + look.Unit)
+                if tpBatVersion == "V2" then
+                    local aimPos = locked.Position + Vector3.new(0, 0.9, 0)
+                        + Vector3.new(vel.X, 0, vel.Z) * 0.05
+                    local look = Vector3.new(locked.CFrame.LookVector.X, 0, locked.CFrame.LookVector.Z)
+                    if look.Magnitude < 0.01 then
+                        look = Vector3.new(locked.Position.X - hrp.Position.X, 0, locked.Position.Z - hrp.Position.Z)
+                    end
+                    if look.Magnitude > 0.05 then
+                        hrp.CFrame = CFrame.lookAt(aimPos, aimPos + look.Unit)
+                    else
+                        hrp.CFrame = CFrame.new(aimPos)
+                    end
                 else
-                    hrp.CFrame = CFrame.new(aimPos)
+                    local pred = locked.Position + vel * 0.05 + Vector3.new(0, 0.35, 0)
+                    local aimPos = pred + Vector3.new(0, 0.2, 0)
+                    local look = Vector3.new(vel.X, 0, vel.Z)
+                    if look.Magnitude < 0.15 then
+                        look = Vector3.new(locked.Position.X - hrp.Position.X, 0, locked.Position.Z - hrp.Position.Z)
+                    end
+                    if look.Magnitude > 0.05 then
+                        hrp.CFrame = CFrame.lookAt(aimPos, aimPos + look.Unit)
+                    else
+                        hrp.CFrame = CFrame.new(aimPos)
+                    end
                 end
                 if (hrp.Position - locked.Position).Magnitude > 3.5 then
                     hrp.CFrame = CFrame.lookAt(locked.Position + Vector3.new(0, 0.4, 0), locked.Position)
@@ -2126,20 +2163,21 @@ tpBatSetVisual=nil
                 hrp.AssemblyAngularVelocity = Vector3.zero
 
                 local cam = workspace.CurrentCamera
-                if cam then
+                if cam and (tpBatVersion == "V1" or tpBatCameraLock) then
                     cam.CFrame = CFrame.lookAt(cam.CFrame.Position, locked.Position + Vector3.new(0, 1, 0))
                 end
 
-                voidTpHit()
-                if (hrp.Position - locked.Position).Magnitude < 4 then
+                if autoSwingEnabled or tpBatAutoDisableOnHit
+                    or (hrp.Position - locked.Position).Magnitude < 4 then
                     voidTpHit()
                 end
 
                 local th = locked.Parent and locked.Parent:FindFirstChildOfClass("Humanoid")
                 if th then
                     if th == _voidTp.targetHum and _voidTp.targetHealth
+                        and tpBatAutoDisableOnHit
                         and (th.PlatformStand or th.Health < _voidTp.targetHealth - 0.5) then
-                        -- target got hit / ragdolled â€” stop like Void
+                        -- Optional Noxa behavior: stop after a confirmed hit.
                         stopTPBat()
                         return
                     end
@@ -2213,6 +2251,190 @@ tpBatSetVisual=nil
         if tpBatEnabled or _G.AceAntiDesyncAimbotOn then stopTPBat() else startTPBat() end
     end
 
+    -- ===== E01 CARRY GUARD (MMA-styled, based on Fix E01) =====
+    local function e01IsCarrying()
+        local char = LP.Character
+        if not char then return false end
+        if brainrotDetected == true then return true end
+
+        for _, child in ipairs(char:GetChildren()) do
+            local name = child.Name:lower()
+            if name:find("brainrot") or name:find("brain") or name:find("animal")
+                or name:find("carry") or name:find("stolen")
+                or name:find("held") or name:find("steal") then
+                return true
+            end
+        end
+
+        for attrName, attrValue in pairs(char:GetAttributes()) do
+            local name = attrName:lower()
+            if attrValue == true and (name:find("carrying") or name:find("carry")
+                or name:find("stealing") or name:find("isstealing")
+                or name:find("hasbrainrot")) then
+                return true
+            end
+        end
+
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.WalkSpeed > 0 and hum.WalkSpeed <= 25 and hum.WalkSpeed ~= 16 then
+            return true
+        end
+        return false
+    end
+
+    local function e01ClearNotice()
+        if e01CountdownConn then
+            pcall(function() e01CountdownConn:Disconnect() end)
+            e01CountdownConn = nil
+        end
+        if e01Billboard then
+            pcall(function() e01Billboard:Destroy() end)
+            e01Billboard = nil
+        end
+        local char = LP.Character
+        local head = char and char:FindFirstChild("Head")
+        local old = head and head:FindFirstChild("MMAE01Guard")
+        if old then pcall(function() old:Destroy() end) end
+    end
+
+    local function e01StartNotice()
+        e01ClearNotice()
+        local char = LP.Character
+        local head = char and char:FindFirstChild("Head")
+        if not head then return end
+
+        local billboard = Instance.new("BillboardGui")
+        billboard.Name = "MMAE01Guard"
+        billboard.Adornee = head
+        billboard.Size = UDim2.new(0, 260, 0, 82)
+        billboard.StudsOffset = Vector3.new(0, 5.6, 0)
+        billboard.AlwaysOnTop = true
+        billboard.MaxDistance = 260
+        billboard.Parent = head
+        e01Billboard = billboard
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 1, 0)
+        card.BackgroundColor3 = Color3.fromRGB(14, 16, 24)
+        card.BackgroundTransparency = 0.08
+        card.BorderSizePixel = 0
+        card.Parent = billboard
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+        local stroke = Instance.new("UIStroke", card)
+        stroke.Color = Color3.fromRGB(255, 94, 144)
+        stroke.Thickness = 1.5
+        stroke.Transparency = 0.12
+
+        local eyebrow = Instance.new("TextLabel", card)
+        eyebrow.Size = UDim2.new(1, -24, 0, 16)
+        eyebrow.Position = UDim2.new(0, 12, 0, 7)
+        eyebrow.BackgroundTransparency = 1
+        eyebrow.Text = "MMA  //  E01 GUARD"
+        eyebrow.TextColor3 = Color3.fromRGB(255, 132, 174)
+        eyebrow.TextSize = 10
+        eyebrow.Font = Enum.Font.GothamBold
+        eyebrow.TextXAlignment = Enum.TextXAlignment.Left
+
+        local status = Instance.new("TextLabel", card)
+        status.Name = "Status"
+        status.Size = UDim2.new(1, -24, 0, 25)
+        status.Position = UDim2.new(0, 12, 0, 22)
+        status.BackgroundTransparency = 1
+        status.Text = "SECURE CARRY  3.0s"
+        status.TextColor3 = Color3.fromRGB(245, 247, 255)
+        status.TextSize = 16
+        status.Font = Enum.Font.GothamBlack
+        status.TextXAlignment = Enum.TextXAlignment.Left
+
+        local track = Instance.new("Frame", card)
+        track.Size = UDim2.new(1, -24, 0, 5)
+        track.Position = UDim2.new(0, 12, 1, -17)
+        track.BackgroundColor3 = Color3.fromRGB(48, 51, 66)
+        track.BorderSizePixel = 0
+        Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+        local fill = Instance.new("Frame", track)
+        fill.Size = UDim2.new(0, 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(255, 94, 144)
+        fill.BorderSizePixel = 0
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+        local duration = 3
+        local started = tick()
+        e01CountdownConn = RunService.RenderStepped:Connect(function()
+            if not billboard.Parent or not status.Parent then
+                e01ClearNotice()
+                return
+            end
+            local remaining = math.max(0, duration - (tick() - started))
+            local progress = math.clamp((tick() - started) / duration, 0, 1)
+            fill.Size = UDim2.new(progress, 0, 1, 0)
+            if remaining > 0 then
+                status.Text = string.format("SECURE CARRY  %.1fs", remaining)
+            else
+                if e01CountdownConn then
+                    e01CountdownConn:Disconnect()
+                    e01CountdownConn = nil
+                end
+                status.Text = "STEAL WINDOW OPEN"
+                status.TextColor3 = Color3.fromRGB(92, 255, 171)
+                fill.BackgroundColor3 = Color3.fromRGB(92, 255, 171)
+                stroke.Color = Color3.fromRGB(92, 255, 171)
+                task.delay(2, function()
+                    if billboard and billboard.Parent then
+                        local fade = TweenService:Create(card, TweenInfo.new(0.45), {
+                            BackgroundTransparency = 1
+                        })
+                        local fadeText = TweenService:Create(status, TweenInfo.new(0.45), {
+                            TextTransparency = 1
+                        })
+                        fade:Play()
+                        fadeText:Play()
+                        fade.Completed:Connect(function()
+                            if billboard and billboard.Parent then billboard:Destroy() end
+                            if e01Billboard == billboard then e01Billboard = nil end
+                        end)
+                    end
+                end)
+            end
+        end)
+    end
+
+    stopE01Watch = function()
+        if e01ScanConn then
+            pcall(function() e01ScanConn:Disconnect() end)
+            e01ScanConn = nil
+        end
+        e01WasCarrying = false
+        e01ClearNotice()
+    end
+
+    startE01Watch = function()
+        if e01ScanConn then return end
+        e01ScanConn = RunService.Heartbeat:Connect(function()
+            if not e01Enabled then return end
+            local carrying = e01IsCarrying()
+            if carrying and not e01WasCarrying then
+                e01StartNotice()
+            elseif not carrying and e01WasCarrying then
+                e01ClearNotice()
+            end
+            e01WasCarrying = carrying
+        end)
+    end
+
+    setE01Enabled = function(on)
+        e01Enabled = on == true
+        if e01Enabled then
+            startE01Watch()
+        else
+            stopE01Watch()
+        end
+        if e01SetVisual then pcall(e01SetVisual, e01Enabled) end
+    end
+
+    startE01Watch()
+
     -- full cleanup so player can leave the map without being stuck
     local function mmaFullCleanup()
         -- CharacterRemoving is also fired during a normal respawn.
@@ -2235,6 +2457,8 @@ tpBatSetVisual=nil
             lagger = laggerModeEnabled == true,
         }
         pcall(function() if stopTPBat then stopTPBat() end end)
+        e01WasCarrying = false
+        e01ClearNotice()
         pcall(function() if stopBatAimbot then stopBatAimbot() end end)
         pcall(function()
             if Conns and Conns.antiRag then
@@ -2243,7 +2467,7 @@ tpBatSetVisual=nil
         end)
         pcall(function() if stopAutoLeft then stopAutoLeft() end end)
         pcall(function() if stopAutoRight then stopAutoRight() end end)
-        -- Disconnect steal loop only â€” flags + WantedState stay ON
+        -- Disconnect steal loop only — flags + WantedState stay ON
         pcall(function()
             if ConnsAutoSteal and ConnsAutoSteal.autoSteal then
                 ConnsAutoSteal.autoSteal:Disconnect()
@@ -2296,6 +2520,8 @@ tpBatSetVisual=nil
         pcall(mmaFullCleanup)
     end)
     LP.CharacterAdded:Connect(function(char)
+        e01WasCarrying = false
+        e01ClearNotice()
         task.wait(0.35)
         pcall(applyAvatarCosmetics,char)
         pcall(forceCosmeticsPersistent,char)
@@ -2438,6 +2664,8 @@ saveConfig=function()
         safeSpeedNearBaseEnabled=safeSpeedNearBaseEnabled==true,
         mmaServerLaggerEnabled=mmaServerLaggerEnabled==true,
         headlessEnabled=headlessEnabled==true, korbloxEnabled=korbloxEnabled==true,
+        tpBatVersion=tpBatVersion, tpBatCameraLock=tpBatCameraLock,
+        tpBatAutoDisableOnHit=tpBatAutoDisableOnHit, e01Enabled=e01Enabled,
         keys=keyTbl, controllerKeys=ctrlTbl,
     }
     local ok, encoded = pcall(function() return HS:JSONEncode(cfg) end)
@@ -2461,6 +2689,8 @@ resetAllSettings = function()
     autoTPEnabled=false;autoTPHeight=20;antiLagEnabled=false;stretchRezEnabled=false
     Steal.AutoStealEnabled=false;Steal.StealRadius=60;Steal.StealDuration=1.4;Steal.CompleteRadius=9;Steal.Mode="V1"
     BAT_AIMBOT_SPEED=58
+    tpBatVersion="V1";tpBatCameraLock=false;tpBatAutoDisableOnHit=false;e01Enabled=true
+    if setE01Enabled then pcall(setE01Enabled,true) end
     guiTransparencyEnabled=false;mobileButtonsEnabled=true;mobileButtonsSize=80
     circleButtonsEnabled=false;uiLocked=false;fovValue=80;fovIndex=1
     introSoundEnabled=true
@@ -2970,6 +3200,13 @@ pcall(function()
     if type(d.mmaServerLaggerEnabled)=="boolean" then setMmaServerLagger(d.mmaServerLaggerEnabled) end
     if type(d.headlessEnabled)=="boolean" then headlessEnabled=d.headlessEnabled end
     if type(d.korbloxEnabled)=="boolean" then korbloxEnabled=d.korbloxEnabled end
+    if d.tpBatVersion=="V1" or d.tpBatVersion=="V2" then tpBatVersion=d.tpBatVersion end
+    if type(d.tpBatCameraLock)=="boolean" then tpBatCameraLock=d.tpBatCameraLock end
+    if type(d.tpBatAutoDisableOnHit)=="boolean" then tpBatAutoDisableOnHit=d.tpBatAutoDisableOnHit end
+    if type(d.e01Enabled)=="boolean" then
+        e01Enabled=d.e01Enabled
+        if setE01Enabled then setE01Enabled(e01Enabled) end
+    end
     -- re-apply after config load (flags were false at first CharacterAdded)
     if LP.Character then
         task.spawn(function()
@@ -2981,7 +3218,7 @@ pcall(function()
 end)
 
 -- ============================================================
--- APPLY CONFIG â€” porneste sistemele dupa ce valorile au fost incarcate
+-- APPLY CONFIG — porneste sistemele dupa ce valorile au fost incarcate
 -- ============================================================
 pcall(function()
     -- Zombie Animations
@@ -3071,7 +3308,7 @@ end)
 end
 pcall(__spectrumBoot_config)
 
--- CYBER GUI â€” rulat in functie proprie ca sa evite limita 200 locals
+-- CYBER GUI — rulat in functie proprie ca sa evite limita 200 locals
 -- ============================================================
 ;(function()
 
@@ -3241,7 +3478,7 @@ _GuiKeys = Keys
 
     local ML=Instance.new("TextLabel")
     ML.Position=UDim2.new(0,14,0,32); ML.Size=UDim2.new(0,200,0,14); ML.BackgroundTransparency=1
-    ML.Text="MMA STEAL OMG  â€¢  MOBILE"; ML.TextColor3=C.textDim; ML.TextSize=10; ML.Font=Enum.Font.GothamBold
+    ML.Text="MMA STEAL OMG  •  MOBILE"; ML.TextColor3=C.textDim; ML.TextSize=10; ML.Font=Enum.Font.GothamBold
     ML.TextXAlignment=Enum.TextXAlignment.Left; ML.Parent=HF; ML.ZIndex=3
 
     -- MINIMIZE BUTTON
@@ -3314,11 +3551,11 @@ local KeyListen={cb=nil,label=nil,active=false,disabledBoxes=nil,sinkBound=false
 local CAS = game:GetService("ContextActionService")
 local KEY_ALIASES={
     ButtonA="A",ButtonB="B",ButtonX="X",ButtonY="Y",ButtonR1="RB",ButtonR2="RT",ButtonL1="LB",ButtonL2="LT",
-    DPadUp="Dâ†‘",DPadDown="Dâ†“",DPadLeft="Dâ†",DPadRight="Dâ†’",ButtonStart="â–¶",ButtonSelect="â—€",
+    DPadUp="D↑",DPadDown="D↓",DPadLeft="D←",DPadRight="D→",ButtonStart="▶",ButtonSelect="◀",
     LeftShift="LShift",RightShift="RShift",LeftControl="LCtrl",RightControl="RCtrl",LeftAlt="LAlt",RightAlt="RAlt",
     LeftSuper="LSuper",RightSuper="RSuper",Return="Enter",BackSpace="Backspace",Tab="Tab",CapsLock="CapsLock",
     Escape="Esc",Space="Space",PageUp="PgUp",PageDown="PgDn",End="End",Home="Home",Insert="Ins",Delete="Del",
-    Up="â†‘",Down="â†“",Left="â†",Right="â†’",F1="F1",F2="F2",F3="F3",F4="F4",F5="F5",F6="F6",F7="F7",F8="F8",
+    Up="↑",Down="↓",Left="←",Right="→",F1="F1",F2="F2",F3="F3",F4="F4",F5="F5",F6="F6",F7="F7",F8="F8",
     F9="F9",F10="F10",F11="F11",F12="F12",Print="PrtScn",ScrollLock="ScrLk",Pause="Pause",
     Minus="-",Equals="=",LeftBracket="[",RightBracket="]",BackSlash="\\",Semicolon=";",Quote="'",
     Comma=",",Period=".",Slash="/",Backquote="`"
@@ -3412,7 +3649,7 @@ local function startKL(lbl,onSet)
         end
     end)
 end
--- Capture key while listening â€” block typing into any TextBox
+-- Capture key while listening — block typing into any TextBox
 UIS.InputBegan:Connect(function(inp,_gameProcessed)
     if not KeyListen.active then return end
     -- force unfocus every key while listening
@@ -3489,7 +3726,7 @@ local function addToggleRow(parent,label,enabled,order,kbKey,onToggle)
     return Row,setV
 end
 local function addActionRow(parent,label,kbKey,onAction,order)
-    -- No keybind picker here â€” Keys tab only
+    -- No keybind picker here — Keys tab only
     local Row=Instance.new("Frame",parent); Row.Size=UDim2.new(1,0,0,38); Row.BackgroundColor3=C.row
     Row.BackgroundTransparency=0.5; Row.BorderSizePixel=0; Row.LayoutOrder=order; guiCorner(Row,10); guiStroke(Row,C.divider,1)
     local Lb=Instance.new("TextLabel",Row); Lb.Size=UDim2.new(0.55,0,0,16); Lb.Position=UDim2.new(0,12,0,8)
@@ -3612,11 +3849,24 @@ end)()
         if on then if startTPBat then startTPBat() end else if stopTPBat then stopTPBat() end end
     end)
     tpBatSetVisual=svTPBat
-    local _,svAutoSwing=addToggleRow(cp,"Auto Swing",autoSwingEnabled,4,nil,function(on) autoSwingEnabled=on;saveConfig() end)
-    local _,svBatCounter=addToggleRow(cp,"Bat Counter",batCounterEnabled,5,nil,function(on) batCounterEnabled=on;if on then startBatCounter() else stopBatCounter() end;saveConfig() end)
+    local _,tpModeBtn=addCycleRow(cp,"TP Bat Engine",tpBatVersion,4,function()
+        tpBatVersion=(tpBatVersion=="V1") and "V2" or "V1"
+        if _G.AceAntiDesyncAimbotOn then
+            if stopTPBat then stopTPBat() end
+            task.defer(function() if startTPBat then startTPBat() end end)
+        end
+        saveConfig()
+        return tpBatVersion
+    end)
+    local _,svTPCamera=addToggleRow(cp,"TP Bat Camera Lock",tpBatCameraLock,5,nil,function(on)
+        tpBatCameraLock=on==true
+        saveConfig()
+    end)
+    local _,svAutoSwing=addToggleRow(cp,"Auto Swing",autoSwingEnabled,6,nil,function(on) autoSwingEnabled=on;saveConfig() end)
+    local _,svBatCounter=addToggleRow(cp,"Bat Counter",batCounterEnabled,7,nil,function(on) batCounterEnabled=on;if on then startBatCounter() else stopBatCounter() end;saveConfig() end)
     setBatCounterVisual=svBatCounter
-    addSectLbl(cp,"RAGDOLL",6)
-    local _,svRagdoll=addToggleRow(cp,"Anti Ragdoll",antiRagdollEnabled,7,nil,function(on)
+    addSectLbl(cp,"RAGDOLL",8)
+    local _,svRagdoll=addToggleRow(cp,"Anti Ragdoll",antiRagdollEnabled,9,nil,function(on)
         if on then
             _G.MMA_WantedState.antiRag = true
             antiRagdollEnabled=true
@@ -3630,11 +3880,11 @@ end)()
     end)
     setAntiRagVisual=svRagdoll
     if antiRagdollEnabled then svRagdoll(true) end
-    local _,svMedusa=addToggleRow(cp,"Medusa Counter",medusaCounterEnabled,8,nil,function(on) medusaCounterEnabled=on;if on then setupMedusa(LP.Character) else stopMedusaCounter() end;saveConfig() end)
+    local _,svMedusa=addToggleRow(cp,"Medusa Counter",medusaCounterEnabled,10,nil,function(on) medusaCounterEnabled=on;if on then setupMedusa(LP.Character) else stopMedusaCounter() end;saveConfig() end)
     setMedusaVisual=svMedusa
-    local _,svUnwalk=addToggleRow(cp,"Unwalk",unwalkEnabled,9,nil,function(on) unwalkEnabled=on;if on then startUnwalk() else stopUnwalk() end;saveConfig() end)
-    addSectLbl(cp,"SERVER LAGGER",10)
-    addToggleRow(cp,"MMA Server Lagger",mmaServerLaggerEnabled,11,nil,function(on)
+    local _,svUnwalk=addToggleRow(cp,"Unwalk",unwalkEnabled,11,nil,function(on) unwalkEnabled=on;if on then startUnwalk() else stopUnwalk() end;saveConfig() end)
+    addSectLbl(cp,"SERVER LAGGER",12)
+    addToggleRow(cp,"MMA Server Lagger",mmaServerLaggerEnabled,13,nil,function(on)
         setMmaServerLagger(on)
         if on then openMmaLaggerPanel() end
         saveConfig()
@@ -3645,7 +3895,7 @@ end)()
         row.Size = UDim2.new(1, -8, 0, 34)
         row.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
         row.BorderSizePixel = 0
-        row.LayoutOrder = 12
+         row.LayoutOrder = 14
         row.Parent = cp
         Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
         local b = Instance.new("TextButton", row)
@@ -3664,17 +3914,17 @@ end)()
     end
 
     setUnwalkVisual=svUnwalk
-    addSectLbl(cp,"ACTIONS",9)
-    addActionRow(cp,"Drop Brainrot","dropBrainrot",function() runDrop() end,10)
-    addActionRow(cp,"TP Down","tpDown",function() runTPFloor() end,12)
-    addActionRow(cp,"Unstick (Leave Safe)",nil,function()
+     addSectLbl(cp,"ACTIONS",15)
+     addActionRow(cp,"Drop Brainrot","dropBrainrot",function() runDrop() end,16)
+     addActionRow(cp,"TP Down","tpDown",function() runTPFloor() end,17)
+     addActionRow(cp,"Unstick (Leave Safe)",nil,function()
         if _G.MMAFullCleanup then _G.MMAFullCleanup() end
         pcall(function()
             local hrp=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
             if hrp and sethiddenproperty then sethiddenproperty(hrp,"PhysicsRepRootPart",nil) end
             if hrp then hrp.Anchored=false end
         end)
-    end,13)
+     end,18)
 end)()
 
 -- STEAL PAGE (Rave Hub exact)
@@ -3707,6 +3957,13 @@ end)()
         autoStealDelayRadius=Steal.CompleteRadius
         saveConfig()
     end)
+    addSectLbl(st,"E01 CARRY GUARD",4)
+    local _,svE01=addToggleRow(st,"E01 Countdown",e01Enabled,5,nil,function(on)
+        if setE01Enabled then setE01Enabled(on==true) else e01Enabled=on==true end
+        saveConfig()
+    end)
+    e01SetVisual=svE01
+    if e01Enabled then svE01(true) end
 end)()
 
 -- MOVEMENT PAGE
@@ -4042,7 +4299,7 @@ end)()
 
 -- ============================================================
 -- STREAMER MODE: hide ALL script GUIs (features keep running)
--- Note: OBS/Discord capture the game window â€” true "invisible to
+-- Note: OBS/Discord capture the game window — true "invisible to
 -- stream while you still see UI" is not possible from Roblox Lua.
 -- This mode hides every MMA UI so nothing script-related shows.
 -- Toggle: Visual page OR RightShift (default)
