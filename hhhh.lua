@@ -8,6 +8,7 @@ local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local HS = game:GetService("HttpService")
+local StatsService = game:GetService("Stats")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 
@@ -123,6 +124,7 @@ end
 TS=TweenService
 LP=Players.LocalPlayer
 local NS,CS=59,29
+local LAGGER_SPEED=30
 local LAGGER_CARRY_SPEED=15
 local antiDropEnabled = false
 local antiDropActive = false
@@ -794,25 +796,22 @@ function syncAutoAntiDrop()
     startAntiDrop()
 end
 
+-- Dice full speed system (NS / CS / Lagger / Lagger Carry)
 function getActiveMoveSpeed()
-    local spd
     if laggerModeEnabled then
-        spd = LAGGER_CARRY_SPEED
+        return carrySpeedActive and LAGGER_CARRY_SPEED or LAGGER_SPEED
     elseif carrySpeedActive then
-        spd = CS
+        return CS
     else
-        spd = NS
+        return NS
     end
-    if safeSpeedNearBaseEnabled and carrySpeedActive and isNearEnemyPlot(NEAR_ENEMY_BASE_RANGE) then
-        if spd > SAFE_NEAR_BASE_SPEED then
-            spd = SAFE_NEAR_BASE_SPEED
-        end
-    end
-    return spd
 end
 function getAutoPathSpeed()
-    if laggerModeEnabled then return LAGGER_CARRY_SPEED
-    else return NS end
+    if laggerModeEnabled then
+        return carrySpeedActive and LAGGER_CARRY_SPEED or LAGGER_SPEED
+    else
+        return NS
+    end
 end
 local _autoSwitchWasSteal=false
 function updateAutoSwitchSpeed()
@@ -1549,31 +1548,31 @@ end)()
 RunService.Stepped:Connect(function()
     for _,p in ipairs(Players:GetPlayers()) do if p~=LP and p.Character then for _,part in ipairs(p.Character:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide=false end end end end
 end)
--- Original MMA velocity speed system
+-- Dice full speed movement (HRP.Velocity, Y preserved)
 RunService.RenderStepped:Connect(function()
     local char=LP.Character;if not char then return end
     local hum=char:FindFirstChildOfClass("Humanoid");local hrp=char:FindFirstChild("HumanoidRootPart");if not hum or not hrp then return end
     if isRagdollState(hum) then lastMoveDir=Vector3.new(0,0,0);return end
-    if not autoBatEnabled and not autoLeftEnabled and not autoRightEnabled then
-        local md=hum.MoveDirection;local spd=getActiveMoveSpeed()
-        if md.Magnitude>0 then
-            lastMoveDir=md
-            hrp.Velocity=Vector3.new(md.X*spd,hrp.Velocity.Y,md.Z*spd)
-        elseif antiRagdollEnabled and lastMoveDir.Magnitude>0 then
-            local anyHeld=false
-            for key in pairs(MOVE_KEYS) do
-                if UIS:IsKeyDown(key) then anyHeld=true; break end
-            end
-            if anyHeld then
-                hrp.Velocity=Vector3.new(lastMoveDir.X*spd,hrp.Velocity.Y,lastMoveDir.Z*spd)
-            end
+    if autoBatEnabled or autoLeftEnabled or autoRightEnabled or (tpBatEnabled==true) then return end
+    local md=hum.MoveDirection
+    local spd=getActiveMoveSpeed()
+    if md.Magnitude>0 then
+        lastMoveDir=md
+        hrp.Velocity=Vector3.new(md.X*spd,hrp.Velocity.Y,md.Z*spd)
+    elseif antiRagdollEnabled and lastMoveDir.Magnitude>0 then
+        local anyHeld=false
+        for key in pairs(MOVE_KEYS) do
+            if UIS:IsKeyDown(key) then anyHeld=true;break end
+        end
+        if anyHeld then
+            hrp.Velocity=Vector3.new(lastMoveDir.X*spd,hrp.Velocity.Y,lastMoveDir.Z*spd)
         end
     end
     if speedLabel then
-        speedLabel.Text=string.format("%.1f",Vector3.new(hrp.Velocity.X,0,hrp.Velocity.Z).Magnitude)
+        speedLabel.Text=string.format("%.1f SPEED",Vector3.new(hrp.Velocity.X,0,hrp.Velocity.Z).Magnitude)
     end
 end)
--- Speed counter above head (restore)
+
 LP.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     pcall(setupSpeedIndicator, char)
@@ -2250,6 +2249,11 @@ tpBatSetVisual=nil
     toggleTPBat = function()
         if tpBatEnabled or _G.AceAntiDesyncAimbotOn then stopTPBat() else startTPBat() end
     end
+
+    -- ensure globals (old MMA TP Bat API)
+    _G.startTPBat = startTPBat
+    _G.stopTPBat = stopTPBat
+    _G.toggleTPBat = toggleTPBat
 
     -- ===== E01 CARRY GUARD (MMA-styled, based on Fix E01) =====
     local function e01IsCarrying()
@@ -3334,20 +3338,23 @@ local function makeDraggable_cyber(dragTarget, moveTarget)
     end)
 end
 
+-- Luxury / elegant theme (black + champagne gold)
 local C={
-    bg=Color3.fromRGB(0, 0, 0),
-    bgDark=Color3.fromRGB(0, 0, 0),
-    row=Color3.fromRGB(12, 12, 14),
-    input=Color3.fromRGB(18, 18, 22),
-    blue=Color3.fromRGB(255, 255, 255),
-    blueDim=Color3.fromRGB(180, 180, 190),
-    blueDark=Color3.fromRGB(28, 28, 32),
-    text=Color3.fromRGB(255, 255, 255),
-    textDim=Color3.fromRGB(180, 180, 190),
-    textMuted=Color3.fromRGB(120, 120, 130),
-    white=Color3.fromRGB(255, 255, 255),
-    divider=Color3.fromRGB(40, 40, 48),
-    green=Color3.fromRGB(200, 255, 220),
+    bg=Color3.fromRGB(6, 6, 8),
+    bgDark=Color3.fromRGB(3, 3, 5),
+    row=Color3.fromRGB(14, 14, 18),
+    input=Color3.fromRGB(20, 20, 26),
+    blue=Color3.fromRGB(212, 175, 120),      -- champagne gold
+    blueDim=Color3.fromRGB(180, 150, 110),
+    blueDark=Color3.fromRGB(36, 30, 22),
+    text=Color3.fromRGB(245, 242, 235),
+    textDim=Color3.fromRGB(190, 180, 165),
+    textMuted=Color3.fromRGB(120, 112, 100),
+    white=Color3.fromRGB(255, 252, 245),
+    divider=Color3.fromRGB(48, 42, 34),
+    green=Color3.fromRGB(180, 230, 190),
+    gold=Color3.fromRGB(212, 175, 120),
+    goldSoft=Color3.fromRGB(160, 130, 90),
 }
 local function guiCorner(p,r) local c=Instance.new("UICorner");c.CornerRadius=UDim.new(0,r or 10);c.Parent=p;return c end
 local function guiStroke(p,col,t) local s=Instance.new("UIStroke");s.Color=col or Color3.fromRGB(60,60,70);s.Thickness=t or 1;s.Parent=p;return s end
@@ -3417,8 +3424,8 @@ _GuiKeys = Keys
 
     local Inner=Instance.new("Frame")
     Inner.Name="Inner"; Inner.ClipsDescendants=false; Inner.Size=UDim2.new(1,0,1,0)
-    Inner.BackgroundColor3=C.bg; Inner.BackgroundTransparency=0; Inner.BorderSizePixel=0; Inner.Parent=Outer
-    guiCorner(Inner,24); guiStroke(Inner,Color3.fromRGB(40,40,48),1.2); GuiRefs.inner=Inner
+    Inner.BackgroundColor3=C.bg; Inner.BackgroundTransparency=0.02; Inner.BorderSizePixel=0; Inner.Parent=Outer
+    guiCorner(Inner,18); local innStroke=guiStroke(Inner,C.gold or Color3.fromRGB(212,175,120),1.4); innStroke.Transparency=0.35; GuiRefs.inner=Inner
 
     local BgCont=Instance.new("Frame")
     BgCont.Name="BackgroundContainer"; BgCont.Size=UDim2.new(1,0,1,0)
@@ -4655,6 +4662,165 @@ task.spawn(function()
         end
     end
 end)
+
+
+
+-- ============================================================
+-- PRECISE PING COUNTER (luxury HUD)
+-- Uses Stats Data Ping (ms) + GetNetworkPing fallback, smoothed
+-- ============================================================
+;(function()
+    local StatsService = game:GetService("Stats")
+    local pingHistory = {}
+    local PING_SAMPLES = 12
+
+    local function rawPingMs()
+        local ms = nil
+        pcall(function()
+            local item = StatsService.Network.ServerStatsItem["Data Ping"]
+            if item then
+                local v = item:GetValue()
+                if type(v) == "number" then
+                    ms = v
+                elseif type(v) == "string" then
+                    ms = tonumber((v:gsub("ms",""):gsub("%s","")))
+                end
+            end
+        end)
+        if not ms or ms ~= ms then
+            pcall(function()
+                ms = (LP:GetNetworkPing() or 0) * 1000
+            end)
+        end
+        if not ms or ms ~= ms or ms < 0 then ms = 0 end
+        return ms
+    end
+
+    local function smoothPing(ms)
+        table.insert(pingHistory, ms)
+        if #pingHistory > PING_SAMPLES then table.remove(pingHistory, 1) end
+        local sum = 0
+        for _, v in ipairs(pingHistory) do sum = sum + v end
+        return sum / math.max(1, #pingHistory)
+    end
+
+    local function pingColor(ms)
+        if ms < 60 then return Color3.fromRGB(120, 255, 170)
+        elseif ms < 100 then return Color3.fromRGB(212, 175, 120)
+        elseif ms < 160 then return Color3.fromRGB(255, 190, 90)
+        else return Color3.fromRGB(255, 90, 100) end
+    end
+
+    -- Destroy old
+    pcall(function()
+        local pg = LP:FindFirstChild("PlayerGui")
+        if pg then
+            local old = pg:FindFirstChild("MMA_PingHUD")
+            if old then old:Destroy() end
+        end
+        local cg = game:GetService("CoreGui")
+        local old2 = cg:FindFirstChild("MMA_PingHUD")
+        if old2 then old2:Destroy() end
+    end)
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "MMA_PingHUD"
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.DisplayOrder = 80
+    sg:SetAttribute("MMA_SCRIPT_UI", true)
+    pcall(function()
+        sg.Parent = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 3)
+    end)
+    if not sg.Parent then
+        pcall(function() sg.Parent = game:GetService("CoreGui") end)
+    end
+
+    local card = Instance.new("Frame")
+    card.Name = "PingCard"
+    card.Size = UDim2.new(0, 118, 0, 44)
+    card.Position = UDim2.new(1, -130, 0, 12)
+    card.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+    card.BackgroundTransparency = 0.12
+    card.BorderSizePixel = 0
+    card.Parent = sg
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+    local stroke = Instance.new("UIStroke", card)
+    stroke.Color = Color3.fromRGB(212, 175, 120)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.45
+
+    local accent = Instance.new("Frame", card)
+    accent.Size = UDim2.new(0, 3, 1, -12)
+    accent.Position = UDim2.new(0, 6, 0, 6)
+    accent.BackgroundColor3 = Color3.fromRGB(212, 175, 120)
+    accent.BorderSizePixel = 0
+    Instance.new("UICorner", accent).CornerRadius = UDim.new(1, 0)
+
+    local title = Instance.new("TextLabel", card)
+    title.Size = UDim2.new(1, -16, 0, 12)
+    title.Position = UDim2.new(0, 14, 0, 6)
+    title.BackgroundTransparency = 1
+    title.Text = "PING"
+    title.Font = Enum.Font.GothamMedium
+    title.TextSize = 9
+    title.TextColor3 = Color3.fromRGB(160, 145, 120)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    local value = Instance.new("TextLabel", card)
+    value.Name = "Value"
+    value.Size = UDim2.new(1, -16, 0, 22)
+    value.Position = UDim2.new(0, 14, 0, 18)
+    value.BackgroundTransparency = 1
+    value.Text = "-- ms"
+    value.Font = Enum.Font.GothamBlack
+    value.TextSize = 16
+    value.TextColor3 = Color3.fromRGB(212, 175, 120)
+    value.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Also small label in hub header if present
+    local hubPingLbl = nil
+    task.defer(function()
+        task.wait(0.4)
+        local outer = GuiRefs and GuiRefs.inner
+        if not outer then return end
+        local hf = outer:FindFirstChild("Header") or outer:FindFirstChildWhichIsA("Frame")
+        if not hf then return end
+        local old = outer:FindFirstChild("MMA_HeaderPing")
+        if old then old:Destroy() end
+        hubPingLbl = Instance.new("TextLabel")
+        hubPingLbl.Name = "MMA_HeaderPing"
+        hubPingLbl.Size = UDim2.new(0, 70, 0, 16)
+        hubPingLbl.Position = UDim2.new(1, -100, 0, 10)
+        hubPingLbl.BackgroundTransparency = 1
+        hubPingLbl.Text = "-- ms"
+        hubPingLbl.Font = Enum.Font.GothamBold
+        hubPingLbl.TextSize = 11
+        hubPingLbl.TextColor3 = Color3.fromRGB(212, 175, 120)
+        hubPingLbl.TextXAlignment = Enum.TextXAlignment.Right
+        hubPingLbl.ZIndex = 5
+        hubPingLbl.Parent = outer
+    end)
+
+    local lastUpdate = 0
+    RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - lastUpdate < 0.12 then return end
+        lastUpdate = now
+        local ms = smoothPing(rawPingMs())
+        local txt = string.format("%.0f ms", ms)
+        if value and value.Parent then
+            value.Text = txt
+            value.TextColor3 = pingColor(ms)
+            accent.BackgroundColor3 = pingColor(ms)
+            stroke.Color = pingColor(ms)
+        end
+        if hubPingLbl and hubPingLbl.Parent then
+            hubPingLbl.Text = txt
+            hubPingLbl.TextColor3 = pingColor(ms)
+        end
+    end)
+end)()
 
 print("MMA steal OMGGGGGGGGG what fackkkk")
 print("LEKAD BY FRNK33.")
