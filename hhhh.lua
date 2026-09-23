@@ -2683,20 +2683,15 @@ destroyMobileButtons = function()
     mobBtnRefs={}
 end
 buildMobileButtons = function()
-    -- Side buttons are a permanent part of this script UI.
-    -- Do not allow an old config value to skip rebuilding them.
-    mobileButtonsEnabled = true
-    destroyMobileButtons()
+    destroyMobileButtons(); if not mobileButtonsEnabled then return end
 
     local mobGui = Instance.new("ScreenGui")
     mobGui.Name = "MMAMobileButtons"
     mobGui.ResetOnSpawn = false
-    -- Keep the side buttons above the script panels and restore them after respawn.
-    mobGui.DisplayOrder = 200
-    mobGui.Enabled = true
+    -- LOW DisplayOrder + PlayerGui so Roblox menu/logo stays clickable
+    mobGui.DisplayOrder = 1
     mobGui.IgnoreGuiInset = false
     pcall(function() mobGui.ClipToDeviceSafeArea = true end)
-    pcall(function() mobGui:SetAttribute("MMA_MOBILE_BUTTONS", true) end)
     -- Prefer PlayerGui so we never cover Roblox top-bar / leave menu
     local pg = LP:FindFirstChild("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
     if pg then
@@ -2736,7 +2731,6 @@ buildMobileButtons = function()
         local relY = 10 + rowN * (QS + QG)
 
         local frame = Instance.new("Frame", mbGroup)
-        frame.Name = "MMA_SideButton_" .. tostring(col) .. "_" .. tostring(rowN)
         frame.Size = UDim2.new(0, QS, 0, QS)
         frame.Position = UDim2.new(0, relX, 0, relY)
         frame.BackgroundColor3 = Q_OFF
@@ -3992,7 +3986,7 @@ end
     addToggleRow(vi,"Stretch Rez",stretchRezEnabled,6,nil,function(on) if on then enableStretchRez() else disableStretchRez() end;saveConfig() end)
     addToggleRow(vi,"Ragdoll GUI",ragdollGuiEnabled,7,nil,function(on) ragdollGuiEnabled=on;saveConfig() end)
     addSectLbl(vi,"STREAMER",7)
-    local _,svStream=addToggleRow(vi,"Streamer Mode (Hide Main UI)",streamerModeEnabled,8,nil,function(on)
+    local _,svStream=addToggleRow(vi,"Streamer Mode (Hide All UI)",streamerModeEnabled,8,nil,function(on)
         setStreamerMode(on)
         saveConfig()
     end)
@@ -4169,17 +4163,14 @@ function setStreamerMode(on)
     -- When OFF: restore (unless Roblox menu is open)
     if streamerModeEnabled then
         for _, g in ipairs(mmaCollectScriptGuis()) do
-            -- Side buttons stay available even when the main settings panel is hidden.
-            if g ~= mobGuiRef then
-                pcall(function()
-                    g:SetAttribute("MMA_PrevEnabled", g:IsA("LayerCollector") and g.Enabled or true)
-                    if g:IsA("LayerCollector") then
-                        g.Enabled = false
-                    elseif g:IsA("BillboardGui") then
-                        g.Enabled = false
-                    end
-                end)
-            end
+            pcall(function()
+                g:SetAttribute("MMA_PrevEnabled", g:IsA("LayerCollector") and g.Enabled or true)
+                if g:IsA("LayerCollector") then
+                    g.Enabled = false
+                elseif g:IsA("BillboardGui") then
+                    g.Enabled = false
+                end
+            end)
         end
         -- also hide MiniBtn / Outer if present
         pcall(function()
@@ -4411,45 +4402,11 @@ if GuiRefs.backgroundImage then GuiRefs.backgroundImage.Visible=false end
 CandyApplyCustomSky(currentSkyTheme)
 mobileButtonsEnabled=true
 buildMobileButtons()
-
--- PERMANENT SIDE-BUTTON WATCHDOG
--- Rebuilds the button GUI if another script, respawn cleanup, or a stale
--- config removes it. Native Roblox menu state is respected temporarily.
-local function ensureMobileButtons()
-    mobileButtonsEnabled = true
-    if _G.MMA_CoreMenuOpen then return end
-
-    local group = mobGuiRef and mobGuiRef:FindFirstChild("MobileButtons")
-    local buttonCount = 0
-    if group then
-        for _, child in ipairs(group:GetChildren()) do
-            if child:IsA("Frame") then buttonCount = buttonCount + 1 end
-        end
-    end
-
-    local intact = mobGuiRef
-        and mobGuiRef.Parent
-        and mobGuiRef:IsA("ScreenGui")
-        and mobGuiRef.Enabled
-        and group
-        and buttonCount >= 7
-
-    if not intact then
+task.delay(0.5,function() mobileButtonsEnabled=true; pcall(buildMobileButtons) end)
+task.delay(2,function()
+    if not mobGuiRef or not mobGuiRef.Parent then
+        mobileButtonsEnabled=true
         pcall(buildMobileButtons)
-    end
-    if mobGuiRef and mobGuiRef.Parent then
-        mobGuiRef.Enabled = true
-    end
-end
-
-ensureMobileButtons()
-local watchdogToken = {}
-_G.MMA_MobileButtonsWatchdogToken = watchdogToken
-task.spawn(function()
-    while _G.MMA_MobileButtonsWatchdogToken == watchdogToken do
-        task.wait(0.5)
-        if _G.MMA_MobileButtonsWatchdogToken ~= watchdogToken then break end
-        pcall(ensureMobileButtons)
     end
 end)
 
