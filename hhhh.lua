@@ -1,4 +1,19 @@
-if _G.NexusRunning then return end
+-- Cleanup previous instance so re-execute works on mobile
+pcall(function()
+    for _, name in ipairs({"nexus", "NexusMobilePanel", "CLEAN HUB", "BloodHounds", "BloodHoundsMobilePanel"}) do
+        local cg = game:GetService("CoreGui")
+        local old = cg:FindFirstChild(name)
+        if old then old:Destroy() end
+        local pg = game:GetService("Players").LocalPlayer
+        if pg then
+            local pgui = pg:FindFirstChild("PlayerGui")
+            if pgui then
+                local o2 = pgui:FindFirstChild(name)
+                if o2 then o2:Destroy() end
+            end
+        end
+    end
+end)
 _G.NexusRunning = true
 
 repeat task.wait() until game:IsLoaded()
@@ -13,6 +28,105 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local LP = Players.LocalPlayer
 local camera = workspace.CurrentCamera
+
+-- Executor-safe file helpers (mobile + PC)
+local function _getFileApi(kind)
+    local env = (getgenv and getgenv()) or _G
+    local candidates = {}
+    if kind == "write" then
+        candidates = {
+            writefile,
+            syn and syn.writefile,
+            fluxus and fluxus.writefile,
+            crypt and crypt.writefile,
+            env.writefile,
+            env.syn and env.syn.writefile,
+            env.fluxus and env.fluxus.writefile,
+        }
+    elseif kind == "read" then
+        candidates = {
+            readfile,
+            syn and syn.readfile,
+            fluxus and fluxus.readfile,
+            env.readfile,
+            env.syn and env.syn.readfile,
+        }
+    elseif kind == "is" then
+        candidates = {
+            isfile,
+            syn and syn.isfile,
+            env.isfile,
+        }
+    end
+    for _, fn in ipairs(candidates) do
+        if type(fn) == "function" then return fn end
+    end
+    return nil
+end
+
+local function _fileWrite(name, data)
+    local fn = _getFileApi("write")
+    if not fn then
+        -- last resort: memory so at least same-session persists
+        _G.__NexusConfigCache = _G.__NexusConfigCache or {}
+        _G.__NexusConfigCache[name] = data
+        warn("[nexus] writefile unavailable — settings kept in memory only")
+        return true, "memory"
+    end
+    pcall(function()
+        local mf = makefolder or (syn and syn.makefolder)
+        if type(mf) == "function" then pcall(mf, "nexus_cfg") end
+    end)
+    local ok, err = pcall(fn, name, data)
+    if not ok then
+        -- try alternate path
+        ok, err = pcall(fn, "nexus_cfg/" .. name, data)
+        if ok then
+            _G.__NexusConfigPath = "nexus_cfg/" .. name
+        end
+    else
+        _G.__NexusConfigPath = name
+    end
+    if ok then
+        _G.__NexusConfigCache = _G.__NexusConfigCache or {}
+        _G.__NexusConfigCache[name] = data
+    end
+    return ok, err
+end
+
+local function _fileRead(name)
+    local fn = _getFileApi("read")
+    local paths = { name, _G.__NexusConfigPath, "nexus_cfg/" .. name }
+    if fn then
+        for _, p in ipairs(paths) do
+            if type(p) == "string" and p ~= "" then
+                local ok, data = pcall(fn, p)
+                if ok and type(data) == "string" and #data > 0 then
+                    return data
+                end
+            end
+        end
+    end
+    local cache = _G.__NexusConfigCache
+    if cache and type(cache[name]) == "string" then
+        return cache[name]
+    end
+    return nil
+end
+
+local function _fileExists(name)
+    local isfn = _getFileApi("is")
+    if isfn then
+        for _, p in ipairs({name, "nexus_cfg/" .. name, _G.__NexusConfigPath}) do
+            if type(p) == "string" and p ~= "" then
+                local ok, r = pcall(isfn, p)
+                if ok and r then return true end
+            end
+        end
+    end
+    return _fileRead(name) ~= nil
+end
+
 
 -- ============================================================
 -- CACHÉ LOCAL DE SERVICIOS Y FUNCIONES (hot paths)
@@ -1058,6 +1172,7 @@ speedMode = false
 antiRagdollMode = "off"
 antiDieEnabled = false
 antiFlingEnabled = false
+mobileButtonsVisible = true
 jumpEnabled = false
 laggerToggled = false
 laggerCarryToggled = false
@@ -4730,6 +4845,7 @@ function buildConfigTable()
         antiRagdollMode = antiRagdollMode,
         antiDieEnabled = antiDieEnabled,
         antiFlingEnabled = antiFlingEnabled,
+        mobileButtonsVisible = mobileButtonsVisible ~= false,
         autoSteal = CONFIG.AUTO_STEAL_ENABLED,
         selectedStealMode = selectedStealMode,
         medusaCounter = medusaCounterEnabled,
@@ -4807,17 +4923,30 @@ end
 function saveAllSettings()
     if _isResetting then return true end
     local config = buildConfigTable()
-    local json = HS:JSONEncode(config)
+    local okEnc, json = pcall(function() return HS:JSONEncode(config) end)
+    if not okEnc or not json then
+        warn("[nexus] save encode failed")
+        return false
+    end
     if json == _lastSavedJSON then return true end
-    local success, err = pcall(function() writefile(CONFIG_FILE, json) end)
-    if success then _lastSavedJSON = json end
-    return success
+    local success, err = _fileWrite(CONFIG_FILE, json)
+    if success then
+        _lastSavedJSON = json
+    else
+        warn("[nexus] save failed:", tostring(err))
+    end
+    return success and true or false
 end
 
 function loadAllSettings()
-    if not isfile or not isfile(CONFIG_FILE) then return false end
-    local success, data = pcall(function() return HS:JSONDecode(readfile(CONFIG_FILE)) end)
-    if not success or not data then return false end
+    if not _fileExists(CONFIG_FILE) then return false end
+    local raw = _fileRead(CONFIG_FILE)
+    if not raw or raw == "" then return false end
+    local success, data = pcall(function() return HS:JSONDecode(raw) end)
+    if not success or type(data) ~= "table" then
+        warn("[nexus] load decode failed")
+        return false
+    end
     _isLoading = true
     NS = data.normalSpeed or NS
     CS = data.carrySpeed or CS
@@ -4825,7 +4954,7 @@ function loadAllSettings()
     LAGGER_CARRY_SPEED = data.laggerSpeed2 or LAGGER_CARRY_SPEED
     CONFIG.STEAL_RANGE = data.stealRadius or CONFIG.STEAL_RANGE
     if radInput then radInput.Text = tostring(CONFIG.STEAL_RANGE) end
-    uiLocked = data.lockUI or true
+    uiLocked = (data.lockUI == nil) and true or data.lockUI
     editModeEnabled = data.editMode or false
     if data.antiRagdollMode then
         antiRagdollMode = data.antiRagdollMode
@@ -4834,6 +4963,7 @@ function loadAllSettings()
     end
     antiDieEnabled = data.antiDieEnabled or false
     antiFlingEnabled = data.antiFlingEnabled or false
+    if data.mobileButtonsVisible == nil then mobileButtonsVisible = true else mobileButtonsVisible = data.mobileButtonsVisible and true or false end
     CONFIG.AUTO_STEAL_ENABLED = data.autoSteal or false
     selectedStealMode = (data.selectedStealMode == "V2") and "V2" or "V1"
     medusaCounterEnabled = data.medusaCounter or false
@@ -5211,8 +5341,11 @@ function resetToFactoryDefaults()
         CarrySystem.speedToggled = false
         CarrySystem.laggerMode = 0
         CarrySystem.softStealEnabled = false
-        if isfile and isfile(CONFIG_FILE) then
-            pcall(delfile, CONFIG_FILE)
+        if _fileExists(CONFIG_FILE) then
+            pcall(function()
+                local df = delfile or (syn and syn.delfile)
+                if type(df) == "function" then df(CONFIG_FILE) end
+            end)
         end
         resetFloatingPositions()
         forceResetUI()
@@ -6764,6 +6897,7 @@ function buildGui()
         CONFIG.AUTO_STEAL_ENABLED = on
         if on then pcall(startAutoSteal) else stopAutoSteal() end
         updateProgressBarVisibility()
+        saveAllSettings()
     end)
 
     do
@@ -6810,6 +6944,12 @@ function buildGui()
     end
 
     mkSect(configPage, "UI Settings")
+    setMobileButtonsVisual = mkToggle(configPage, "Side Buttons", function(on)
+        setMobileButtonsVisible(on)
+        saveAllSettings()
+    end)
+    if setMobileButtonsVisual then setMobileButtonsVisual(mobileButtonsVisible ~= false) end
+
     do
         local row = mkRow(configPage, 38)
         mkLabel(row, "UI Scale")
@@ -7157,11 +7297,23 @@ function buildGui()
     drag(main)
 end
 
+function setMobileButtonsVisible(on)
+    mobileButtonsVisible = on and true or false
+    if MobilePanel then
+        pcall(function()
+            MobilePanel.Enabled = mobileButtonsVisible
+        end)
+    end
+end
+
 function createMobilePanel()
+
     local panel = Instance.new("ScreenGui")
     panel.Name = "NexusMobilePanel"
     panel.ResetOnSpawn = false
     panel.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    panel.Enabled = true
+    panel.DisplayOrder = 50
     pcall(function() if syn and syn.protect_gui then syn.protect_gui(panel) end end)
     local okPanel = pcall(function() panel.Parent = game:GetService("CoreGui") end)
     if not okPanel then panel.Parent = LP:WaitForChild("PlayerGui") end
@@ -7460,16 +7612,40 @@ function createMobilePanel()
     if buttons.Lagger1 and buttons.Lagger1.setActive then buttons.Lagger1.setActive(laggerToggled) end
     if buttons.Lagger2 and buttons.Lagger2.setActive then buttons.Lagger2.setActive(laggerCarryToggled) end
 
-    if savedMobilePanelPos then
-        container.Position = UDim2.new(
-            savedMobilePanelPos.XScale or 1,
-            savedMobilePanelPos.XOffset or -(PANEL_W + 16),
-            savedMobilePanelPos.YScale or 0.5,
-            savedMobilePanelPos.YOffset or -math.floor(PANEL_H / 2)
-        )
-    else
-        container.Position = UDim2.new(1, -(PANEL_W + 16), 0.5, -math.floor(PANEL_H / 2))
+    local function _applyMobilePos()
+        local def = UDim2.new(1, -(PANEL_W + 16), 0.5, -math.floor(PANEL_H / 2))
+        if not savedMobilePanelPos then
+            container.Position = def
+            return
+        end
+        local xs = tonumber(savedMobilePanelPos.XScale) or 1
+        local xo = tonumber(savedMobilePanelPos.XOffset) or -(PANEL_W + 16)
+        local ys = tonumber(savedMobilePanelPos.YScale) or 0.5
+        local yo = tonumber(savedMobilePanelPos.YOffset) or -math.floor(PANEL_H / 2)
+        container.Position = UDim2.new(xs, xo, ys, yo)
+        -- Keep on-screen after layout (mobile can save off-screen coords)
+        task.defer(function()
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                local vp = cam.ViewportSize
+                local ap = container.AbsolutePosition
+                local as = container.AbsoluteSize
+                if as.X <= 0 or as.Y <= 0 then return end
+                local margin = 8
+                local nx, ny = ap.X, ap.Y
+                if nx + as.X < margin then nx = margin end
+                if ny + as.Y < margin then ny = margin end
+                if nx > vp.X - margin then nx = vp.X - as.X - margin end
+                if ny > vp.Y - margin then ny = vp.Y - as.Y - margin end
+                if nx ~= ap.X or ny ~= ap.Y then
+                    container.Position = UDim2.new(0, nx, 0, ny)
+                    savedMobilePanelPos = {XScale=0, XOffset=nx, YScale=0, YOffset=ny}
+                end
+            end)
+        end)
     end
+    _applyMobilePos()
 
     local draggingPanel = false
     local dragStartPos = nil
@@ -7502,6 +7678,7 @@ function createMobilePanel()
                 YScale = container.Position.Y.Scale,
                 YOffset = container.Position.Y.Offset
             }
+            pcall(saveAllSettings)
         end
         dragStartPos = nil
         dragStartMousePos = nil
@@ -7516,6 +7693,7 @@ function createMobilePanel()
         end
     end)
 
+    panel.Enabled = (mobileButtonsVisible ~= false)
     return panel
 end
 
@@ -8146,6 +8324,9 @@ function updateUIFromLoaded()
         stopAntiFling()
     end
 
+    if setMobileButtonsVisual then setMobileButtonsVisual(mobileButtonsVisible ~= false) end
+    setMobileButtonsVisible(mobileButtonsVisible ~= false)
+
     if CONFIG.AUTO_STEAL_ENABLED and setInstaGrab then setInstaGrab(true); pcall(startAutoSteal) end
 
     if medusaCounterEnabled then
@@ -8268,6 +8449,7 @@ if loadAllSettings() then
 end
 
 MobilePanel = createMobilePanel()
+pcall(function() setMobileButtonsVisible(mobileButtonsVisible ~= false) end)
 tpBatFloatingButton = nil -- TP BAT is now inside NexusMobilePanel
 batV2FloatingButton = nil -- Bat V2 removed
 instaResetFloatingButton = nil -- Insta Reset inside mobile panel
