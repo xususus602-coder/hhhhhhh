@@ -1,6 +1,6 @@
 -- Cleanup previous instance so re-execute works on mobile
 pcall(function()
-    for _, name in ipairs({"nexus", "NexusMobilePanel", "CLEAN HUB", "BloodHounds", "BloodHoundsMobilePanel"}) do
+    for _, name in ipairs({"ZNxInc7", "nexus", "NexusMobilePanel", "TpBatButton", "CLEAN HUB", "BloodHounds", "BloodHoundsMobilePanel"}) do
         local cg = game:GetService("CoreGui")
         local old = cg:FindFirstChild(name)
         if old then old:Destroy() end
@@ -3828,6 +3828,283 @@ local function getClosestPlayerDesync()
     return cp, cd
 end
 
+-- [YOUT] Marcador azul de ultima posicion
+-- Clean up the previous TP BAT marker monitor when the script is re-executed.
+pcall(function()
+    if _G.YoutMarkerConn then _G.YoutMarkerConn:Disconnect(); _G.YoutMarkerConn = nil end
+    if _G.YoutCharacterConn then _G.YoutCharacterConn:Disconnect(); _G.YoutCharacterConn = nil end
+    local oldMarker = Workspace:FindFirstChild("YoutTPBatLastPosition")
+    if oldMarker then oldMarker:Destroy() end
+end)
+
+do
+    local YOUT_MARKER_DISTANCE   = 3
+    local YOUT_MIN_X, YOUT_MAX_X = -536.2, -422
+    local YOUT_MIN_Y, YOUT_MAX_Y = -10,    75
+    local YOUT_MIN_Z, YOUT_MAX_Z = -71.8, 192.9
+    local YOUT_GROUND_Y          = -7
+    local YOUT_LOOKBACK          = 0.2
+    local YOUT_SAMPLE_INTERVAL   = 1 / 60
+
+    local markerState = {
+        markerLocked = false,
+        markerTarget = nil,
+        lastMarker   = nil,
+        samples      = {},
+        accumulator  = 0,
+    }
+
+    local function isInsideAllowedArea(pos)
+        if not pos then return false end
+        return pos.X >= YOUT_MIN_X and pos.X <= YOUT_MAX_X
+           and pos.Y >= YOUT_MIN_Y and pos.Y <= YOUT_MAX_Y
+           and pos.Z >= YOUT_MIN_Z and pos.Z <= YOUT_MAX_Z
+    end
+
+    local function finiteVector(v)
+        return v ~= nil
+            and v.X == v.X and v.Y == v.Y and v.Z == v.Z
+            and math.abs(v.X) < 1e7
+            and math.abs(v.Y) < 1e7
+            and math.abs(v.Z) < 1e7
+    end
+
+    local function hideMarkerVisuals(marker)
+        if not marker then return end
+        pcall(function()
+            marker.Transparency = 1
+            local s = marker:FindFirstChild("AlwaysOnTopSphere")
+            if s then s.Visible = false end
+            local h = marker:FindFirstChild("LastPositionHighlight")
+            if h then h.Enabled = false end
+            local b = marker:FindFirstChild("LastPositionLabel")
+            if b then b.Enabled = false end
+        end)
+    end
+
+    local function clearLastMarker()
+        markerState.markerLocked = false
+        if markerState.lastMarker then
+            hideMarkerVisuals(markerState.lastMarker)
+        end
+    end
+
+    local function getLastMarkerCFrame()
+        local marker = markerState.lastMarker
+        if not (markerState.markerLocked and marker and marker.Parent and marker.Transparency < 1) then
+            return nil
+        end
+        local tracked = markerState.markerTarget
+        local trackedRoot = tracked and tracked.Character
+                             and tracked.Character:FindFirstChild("HumanoidRootPart")
+        if trackedRoot and isInsideAllowedArea(trackedRoot.Position) then
+            clearLastMarker()
+            return nil
+        end
+        local myChar = LP.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return marker.CFrame end
+        local away = Vector3.new(
+            myRoot.Position.X - marker.Position.X, 0,
+            myRoot.Position.Z - marker.Position.Z
+        )
+        if away.Magnitude <= 0.05 then
+            local look = marker.CFrame.LookVector
+            away = Vector3.new(-look.X, 0, -look.Z)
+        end
+        if away.Magnitude <= 0.05 then away = Vector3.new(0, 0, 1) end
+        local teleportPos = marker.Position + away.Unit * YOUT_MARKER_DISTANCE
+        local flat = Vector3.new(
+            marker.Position.X - teleportPos.X, 0,
+            marker.Position.Z - teleportPos.Z
+        )
+        if flat.Magnitude > 0.05 then
+            return _CFlookAt(teleportPos, teleportPos + flat.Unit)
+        end
+        return _CFnew(teleportPos)
+    end
+
+    local function createOrUpdateMarker(targetCFrame)
+        if markerState.markerLocked then return end
+        local tracked = markerState.markerTarget
+        if not tracked or tracked.Parent ~= Players then return end
+        local char = tracked.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum or hum.Health <= 0 then return end
+        if not finiteVector(root.Position) then return end
+        if isInsideAllowedArea(root.Position) then return end
+        if not targetCFrame or not isInsideAllowedArea(targetCFrame.Position) then return end
+
+        local groundCF = _CFnew(
+            targetCFrame.Position.X,
+            YOUT_GROUND_Y,
+            targetCFrame.Position.Z
+        ) * targetCFrame.Rotation
+
+        local marker = markerState.lastMarker
+        if not marker or not marker.Parent then
+            marker = Instance.new("Part")
+            marker.Name         = "YoutTPBatLastPosition"
+            marker.Shape        = Enum.PartType.Ball
+            marker.Size         = Vector3.new(3, 3, 3)
+            marker.Color        = Color3.fromRGB(0, 110, 255)
+            marker.Material     = Enum.Material.Neon
+            marker.Anchored     = true
+            marker.CanCollide   = false
+            marker.CanTouch     = false
+            marker.CanQuery     = false
+            marker.CastShadow   = false
+            marker.Parent       = Workspace
+
+            local overlay = Instance.new("SphereHandleAdornment")
+            overlay.Name        = "AlwaysOnTopSphere"
+            overlay.Adornee     = marker
+            overlay.Radius      = 1.55
+            overlay.Color3      = Color3.fromRGB(0, 125, 255)
+            overlay.Transparency = 0.05
+            overlay.AlwaysOnTop = true
+            overlay.Visible     = true
+            overlay.ZIndex      = 10
+            overlay.Parent      = marker
+
+            local hl = Instance.new("Highlight")
+            hl.Name = "LastPositionHighlight"
+            hl.Adornee = marker
+            hl.FillColor = Color3.fromRGB(0, 110, 255)
+            hl.FillTransparency = 0.15
+            hl.OutlineColor = Color3.fromRGB(120, 200, 255)
+            hl.OutlineTransparency = 0
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Enabled = true
+            hl.Parent = marker
+
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "LastPositionLabel"
+            bb.Size = UDim2.new(0, 110, 0, 20)
+            bb.StudsOffset = Vector3.new(0, 2.1, 0)
+            bb.AlwaysOnTop = true
+            bb.Adornee = marker
+            bb.Parent = marker
+
+            local lbl = Instance.new("TextLabel")
+            lbl.Name = "Text"
+            lbl.Size = UDim2.fromScale(1, 1)
+            lbl.BackgroundTransparency = 1
+            lbl.Text = "ultima posicion"
+            lbl.TextColor3 = Color3.fromRGB(220, 235, 255)
+            lbl.TextStrokeColor3 = Color3.fromRGB(0, 35, 90)
+            lbl.TextStrokeTransparency = 0.25
+            lbl.TextSize = 11
+            lbl.Font = Enum.Font.GothamMedium
+            lbl.Parent = bb
+
+            markerState.lastMarker = marker
+        end
+
+        marker.Transparency = 0
+        local s = marker:FindFirstChild("AlwaysOnTopSphere");      if s then s.Visible = true end
+        local h = marker:FindFirstChild("LastPositionHighlight");  if h then h.Enabled = true end
+        local b = marker:FindFirstChild("LastPositionLabel");      if b then b.Enabled = true end
+        marker.CFrame = groundCF
+        markerState.markerLocked = true
+    end
+
+    local function snapshotBeforeExit(history, now)
+        if not history or #history == 0 then return nil end
+        local cutoff = now - YOUT_LOOKBACK
+        local selected
+        for _, entry in ipairs(history) do
+            if entry.time <= cutoff then selected = entry else break end
+        end
+        return selected or history[1]
+    end
+
+    local function pickClosestEnemy(myRoot)
+        local closest, bestDistSq = nil, _huge
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and plr.Character then
+                local r = plr.Character:FindFirstChild("HumanoidRootPart")
+                local h = plr.Character:FindFirstChildOfClass("Humanoid")
+                if r and h and h.Health > 0 and finiteVector(r.Position) then
+                    local d = (r.Position - myRoot.Position).Magnitude
+                    if d < bestDistSq then closest = plr; bestDistSq = d end
+                end
+            end
+        end
+        return closest
+    end
+
+    local function monitorLastTarget()
+        local myChar = LP.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+
+        local tracked = markerState.markerTarget
+        if tracked and tracked.Parent == Players then
+            local char = tracked.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            local sample = markerState.samples[tracked] or {}
+            markerState.samples[tracked] = sample
+
+            if root and hum and hum.Health > 0 and finiteVector(root.Position) then
+                if isInsideAllowedArea(root.Position) then
+                    local now = _tick()
+                    if markerState.markerLocked then sample.history = {} end
+                    sample.history = sample.history or {}
+                    table.insert(sample.history, { time = now, safeCFrame = root.CFrame })
+                    while sample.history[1]
+                        and now - sample.history[1].time > (YOUT_LOOKBACK + 0.25) do
+                        table.remove(sample.history, 1)
+                    end
+                    sample.safeCFrame = root.CFrame
+                    if markerState.markerLocked then clearLastMarker() end
+                else
+                    local snap = snapshotBeforeExit(sample.history, _tick())
+                    createOrUpdateMarker((snap and snap.safeCFrame) or sample.safeCFrame)
+                end
+            end
+
+            if (hum and hum.Health <= 0) or (not root and not sample.safeCFrame) then
+                markerState.markerTarget = nil
+                clearLastMarker()
+            else
+                return
+            end
+        end
+
+        local closest = pickClosestEnemy(myRoot)
+        if closest then
+            markerState.markerTarget = closest
+            local r = closest.Character:FindFirstChild("HumanoidRootPart")
+            if r then
+                local sample = markerState.samples[closest] or {}
+                markerState.samples[closest] = sample
+                sample.safeCFrame = r.CFrame
+                sample.history = { { time = _tick(), safeCFrame = r.CFrame } }
+            end
+        end
+    end
+
+    local monitorConn = RunService.Heartbeat:Connect(function(dt)
+        markerState.accumulator = markerState.accumulator + (dt or 0)
+        if markerState.accumulator < YOUT_SAMPLE_INTERVAL then return end
+        markerState.accumulator = markerState.accumulator % YOUT_SAMPLE_INTERVAL
+        pcall(monitorLastTarget)
+    end)
+
+    _G.YoutGetLastMarkerCFrame = getLastMarkerCFrame
+    _G.YoutClearLastMarker     = clearLastMarker
+    _G.YoutMarkerConn          = monitorConn
+
+    _G.YoutCharacterConn = LP.CharacterAdded:Connect(function()
+        clearLastMarker()
+        markerState.markerTarget = nil
+        markerState.samples      = {}
+    end)
+end
+
 local function batDesyncTpUpdate()
     if not batDesyncTpEnabled then
         stopBatDesyncTp()
@@ -3838,6 +4115,25 @@ local function batDesyncTpUpdate()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
+    if _G.YoutGetLastMarkerCFrame then
+        local markerCF = _G.YoutGetLastMarkerCFrame()
+        if markerCF then
+            pcall(function()
+                if hrp.SetNetworkOwner then hrp:SetNetworkOwner(LP) end
+            end)
+            if sethiddenproperty then
+                pcall(function() sethiddenproperty(hrp, "PhysicsRepRootPart", hrp) end)
+            end
+            hrp.CFrame = markerCF
+            local cam = workspace.CurrentCamera
+            if cam then
+                cam.CFrame = _CFnew(cam.CFrame.Position, markerCF.Position)
+            end
+            tryHitBatDesync()
+            return
+        end
+    end
+
     local target = getClosestPlayerDesync()
     if target and target.Character then
         local tr = target.Character:FindFirstChild("HumanoidRootPart")
@@ -3847,17 +4143,14 @@ local function batDesyncTpUpdate()
                     sethiddenproperty(hrp, "PhysicsRepRootPart", tr)
                 end)
             end
-
             local targetPos = tr.Position + _V3new(0, 0.9, 0)
             if (hrp.Position - targetPos).Magnitude > 8 then
                 hrp.CFrame = _CFnew(targetPos)
             end
-
             local cam = workspace.CurrentCamera
             if cam then
                 cam.CFrame = _CFnew(cam.CFrame.Position, tr.Position)
             end
-
             tryHitBatDesync()
         end
     end
@@ -4601,35 +4894,35 @@ function paintFloatingBtn(btnFrame, active)
     local bg = btnFrame:FindFirstChild("BtnGrad")
     local label = btnFrame:FindFirstChild("TextLabel")
     local stroke = btnFrame:FindFirstChildOfClass("UIStroke")
-    btnFrame.BackgroundColor3 = Color3.fromRGB(18,18,22)
+    btnFrame.BackgroundColor3 = Color3.fromRGB(36,22,56)
     if active then
-        local c = getThemeColor()
+        btnFrame.BackgroundColor3 = Color3.fromRGB(8,8,10)
         if bg then
             bg.Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0.00, c:Lerp(Color3.new(1,1,1), 0.55)),
-                ColorSequenceKeypoint.new(0.45, c),
-                ColorSequenceKeypoint.new(1.00, c:Lerp(Color3.new(0,0,0), 0.35)),
+                ColorSequenceKeypoint.new(0.00, Color3.fromRGB(30,30,36)),
+                ColorSequenceKeypoint.new(0.45, Color3.fromRGB(15,15,19)),
+                ColorSequenceKeypoint.new(1.00, Color3.fromRGB(5,5,8)),
             })
         end
         if label then label.TextColor3 = Color3.fromRGB(255,255,255) end
         if stroke then
-            stroke.Color = c
-            stroke.Thickness = 1.5
+            stroke.Color = Color3.fromRGB(151,104,239)
+            stroke.Thickness = 1.6
             stroke.Transparency = 0.1
         end
     else
         if bg then
             bg.Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0.00, Color3.fromRGB(32,32,38)),
-                ColorSequenceKeypoint.new(0.45, Color3.fromRGB(20,20,25)),
-                ColorSequenceKeypoint.new(1.00, Color3.fromRGB(8,8,12)),
+                ColorSequenceKeypoint.new(0.00, Color3.fromRGB(151,104,239)),
+                ColorSequenceKeypoint.new(0.45, Color3.fromRGB(113,61,198)),
+                ColorSequenceKeypoint.new(1.00, Color3.fromRGB(73,38,143)),
             })
         end
-        if label then label.TextColor3 = Color3.fromRGB(235,235,240) end
+        if label then label.TextColor3 = Color3.fromRGB(245,238,255) end
         if stroke then
-            stroke.Color = Color3.fromRGB(75,75,85)
+            stroke.Color = Color3.fromRGB(196,159,245)
             stroke.Thickness = 1
-            stroke.Transparency = 0.25
+            stroke.Transparency = 0.05
         end
     end
 end
@@ -4868,6 +5161,7 @@ function buildConfigTable()
         neonWeather = neonWeatherEnabled,
         skyTheme = skyTheme,
         autoBatV2Enabled = autoBatV2Enabled,
+        mobileButtonLayout = 3,
         mobileButtonPositions = savedButtonPositions,
         dropBrainrotKey = {kb = KB.DropBrainrot.kb and KB.DropBrainrot.kb.Name, gp = KB.DropBrainrot.gp and KB.DropBrainrot.gp.Name},
         autoLeftKey = {kb = KB.AutoLeft.kb and KB.AutoLeft.kb.Name, gp = KB.AutoLeft.gp and KB.AutoLeft.gp.Name},
@@ -5037,12 +5331,25 @@ function loadAllSettings()
     lk(KB.TPBat, data.tpBatKey)
     lk(KB.BatV2, data.batV2Key)
     lk(KB.InstaReset, data.instaResetKey)
-    if data.mobileButtonPositions then savedButtonPositions = data.mobileButtonPositions end
+    -- Preserve saved positions for the 3-column, 4-row mobile button grid.
+    if data.mobileButtonLayout == 3 and type(data.mobileButtonPositions) == "table" then
+        savedButtonPositions = data.mobileButtonPositions
+    else
+        savedButtonPositions = {}
+    end
     if data.mobilePanelPos then savedMobilePanelPos = data.mobilePanelPos end
     if data.tpBatFloatingPos then tpBatFloatingPos = data.tpBatFloatingPos end
     if data.batV2FloatingPos then batV2FloatingPos = data.batV2FloatingPos end
     if data.instaResetFloatingPos then instaResetFloatingPos = data.instaResetFloatingPos end
-    if data.progressBarPos then savedProgressBarPos = data.progressBarPos end
+    if data.progressBarPos then
+        savedProgressBarPos = data.progressBarPos
+        if savedProgressBarPos.XScale == 0.5 and savedProgressBarPos.XOffset == -200 then
+            savedProgressBarPos.XOffset = -160
+        end
+        if savedProgressBarPos.YScale == 1 and savedProgressBarPos.YOffset == -60 then
+            savedProgressBarPos.YOffset = -64
+        end
+    end
     if data.bodyLockEnabled ~= nil then
         bodyLockEnabled = data.bodyLockEnabled
         if bodyLockEnabled then
@@ -5211,7 +5518,8 @@ end
 function resetFloatingPositions()
     if MobilePanel and MobilePanel:FindFirstChild("FloatingPanel") then
         local container = MobilePanel:FindFirstChild("FloatingPanel")
-        container.Position = UDim2.new(1, -144, 0.5, -200)
+        -- 3 columns x 4 rows: 196 px wide x 294 px high.
+        container.Position = UDim2.new(1, -212, 0.5, -147)
         savedButtonPositions = {}
         if container:FindFirstChild("ButtonsContainer") then
             for _, btn in ipairs(container.ButtonsContainer:GetChildren()) do
@@ -5237,7 +5545,7 @@ function resetFloatingPositions()
         instaResetFloatingPos = nil
     end
     if pbFrame then
-        pbFrame.Position = UDim2.new(0.5, -200, 1, -60)
+        pbFrame.Position = UDim2.new(0.5, -160, 1, -64)
         savedProgressBarPos = nil
     end
     savedMobilePanelPos = nil
@@ -5390,14 +5698,15 @@ end
 function getDefaultButtonPosition(btnName)
     local BTN_W, BTN_H = 60, 60
     local GAP = 8
+    local COLUMNS = 3
     local orderMap = {
         DropBR = 0, AutoLeft = 1, AutoBat = 2, AutoRight = 3,
         TpDown = 4, Carry = 5, Lagger1 = 6, Lagger2 = 7,
         TPBat = 8, InstaReset = 9
     }
     local order = orderMap[btnName] or 0
-    local row = _floor(order / 2)
-    local col = order % 2
+    local row = _floor(order / COLUMNS)
+    local col = order % COLUMNS
     return col * (BTN_W + GAP), row * (BTN_H + GAP + 10)
 end
 
@@ -5565,13 +5874,13 @@ function buildGui()
     local STROKE_COLOR = Color3.fromRGB(50,50,50)
     local GUI_W, GUI_H = 330, 480
 
-    local old = game:GetService("CoreGui"):FindFirstChild("nexus") or game:GetService("CoreGui"):FindFirstChild("CLEAN HUB") or game:GetService("CoreGui"):FindFirstChild("BloodHounds")
+    local old = game:GetService("CoreGui"):FindFirstChild("ZNxInc7") or game:GetService("CoreGui"):FindFirstChild("nexus") or game:GetService("CoreGui"):FindFirstChild("CLEAN HUB") or game:GetService("CoreGui"):FindFirstChild("BloodHounds")
     if old then old:Destroy() end
     local pg = LP:FindFirstChild("PlayerGui")
-    if pg then for _,n in ipairs({"nexus","CLEAN HUB","BloodHounds"}) do local o=pg:FindFirstChild(n); if o then o:Destroy() end end end
+    if pg then for _,n in ipairs({"ZNxInc7","nexus","CLEAN HUB","BloodHounds"}) do local o=pg:FindFirstChild(n); if o then o:Destroy() end end end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "nexus"
+    gui.Name = "ZNxInc7"
     gui.ResetOnSpawn = false
     gui.DisplayOrder = 10
     gui.IgnoreGuiInset = true
@@ -5581,7 +5890,8 @@ function buildGui()
 
     main = Instance.new("Frame", gui)
     main.Size = UDim2.new(0, GUI_W, 0, GUI_H)
-    main.Position = UDim2.new(0, 20, 0, 2)
+    main.AnchorPoint = Vector2.new(0.5, 0.5)
+    main.Position = UDim2.new(0.5, 0, 0.5, 0)
     main.BackgroundColor3 = BG
     main.BackgroundTransparency = 0
     main.BorderSizePixel = 0
@@ -5600,7 +5910,7 @@ function buildGui()
     local titleLbl = Instance.new("TextLabel", titleFrame)
     titleLbl.Size = UDim2.new(1, 0, 1, 0)
     titleLbl.BackgroundTransparency = 1
-    titleLbl.Text = "nexus"
+    titleLbl.Text = "ZNxInc7"
     titleLbl.TextColor3 = WHITE
     titleLbl.Font = Enum.Font.GothamBlack
     titleLbl.TextSize = 18
@@ -5635,7 +5945,7 @@ function buildGui()
     miniBtn.BackgroundColor3 = BG2
     miniBtn.BackgroundTransparency = 0
     miniBtn.BorderSizePixel = 0
-    miniBtn.Text = "nexus"
+    miniBtn.Text = "ZNxInc7"
     miniBtn.TextColor3 = selectedColor
     miniBtn.Font = Enum.Font.GothamBold
     miniBtn.TextSize = 12
@@ -5652,7 +5962,7 @@ function buildGui()
         if not main then return end
         main.Visible = true
         miniBtn.Visible = false
-        main.Position = UDim2.new(0, -GUI_W - 20, 0, 2)
+        main.Position = UDim2.new(0, -GUI_W / 2 - 20, 0.5, 0)
         slideTween = TS:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = mainOriginalPos})
         slideTween:Play()
         slideTween.Completed:Connect(function() slideTween = nil end)
@@ -5661,7 +5971,7 @@ function buildGui()
     hideGui = function()
         if slideTween then slideTween:Cancel() end
         if not main or not main.Visible then return end
-        local targetPos = UDim2.new(0, -GUI_W - 20, 0, 2)
+        local targetPos = UDim2.new(0, -GUI_W / 2 - 20, 0.5, 0)
         slideTween = TS:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos})
         slideTween:Play()
         slideTween.Completed:Connect(function()
@@ -5717,7 +6027,9 @@ function buildGui()
         btn.TextSize = 11
         btn.AutoButtonColor = false
         btn.ZIndex = 11
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        local tabCorner = Instance.new("UICorner", btn)
+        -- Keep the outer Config tab square as requested; other tabs remain rounded.
+        tabCorner.CornerRadius = (name == "Config") and UDim.new(0, 0) or UDim.new(0, 8)
         local stroke = Instance.new("UIStroke", btn)
         stroke.Color = ROW_BORDER
         stroke.Thickness = 1
@@ -7117,10 +7429,10 @@ function buildGui()
     spacer.ZIndex = 7
 
     pbFrame = Instance.new("Frame", gui)
-    pbFrame.Size = UDim2.new(0, 400, 0, 70)
-    pbFrame.Position = UDim2.new(0.5, -200, 1, -60)
+    pbFrame.Size = UDim2.new(0, 320, 0, 56)
+    pbFrame.Position = UDim2.new(0.5, -160, 1, -64)
     pbFrame.BackgroundColor3 = Color3.fromRGB(10,10,10)
-    pbFrame.BackgroundTransparency = 0
+    pbFrame.BackgroundTransparency = 0.08
     pbFrame.BorderSizePixel = 0
     pbFrame.Active = true
     pbFrame.ClipsDescendants = true
@@ -7133,9 +7445,9 @@ function buildGui()
     if savedProgressBarPos then
         pbFrame.Position = UDim2.new(
             savedProgressBarPos.XScale or 0.5,
-            savedProgressBarPos.XOffset or -200,
+            savedProgressBarPos.XOffset or -160,
             savedProgressBarPos.YScale or 1,
-            savedProgressBarPos.YOffset or -60
+            savedProgressBarPos.YOffset or -64
         )
     end
 
@@ -7144,39 +7456,39 @@ function buildGui()
 
     local border = Instance.new("UIStroke", pbFrame)
     border.Color = getThemeColor()
-    border.Thickness = 1.5
+    border.Thickness = 1.2
     border.Transparency = 0.3
     border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 
     local discordLabelTop = Instance.new("TextLabel", pbFrame)
     discordLabelTop.Name = "DiscordLabel"
-    discordLabelTop.Size = UDim2.new(1, 0, 0, 18)
+    discordLabelTop.Size = UDim2.new(1, 0, 0, 15)
     discordLabelTop.Position = UDim2.new(0.5, 0, 0, 2)
     discordLabelTop.AnchorPoint = Vector2.new(0.5, 0)
     discordLabelTop.BackgroundTransparency = 1
-    discordLabelTop.Text = "nexus"
+    discordLabelTop.Text = "ZNxInc7 · AUTO STEAL"
     discordLabelTop.TextColor3 = getThemeColor()
     discordLabelTop.Font = Enum.Font.GothamBold
-    discordLabelTop.TextSize = 12
+    discordLabelTop.TextSize = 10
     discordLabelTop.TextScaled = true
     discordLabelTop.TextXAlignment = Enum.TextXAlignment.Center
     discordLabelTop.ZIndex = 15
     applyShimmerToText(discordLabelTop, 0.9)
 
     local topRow = Instance.new("Frame", pbFrame)
-    topRow.Size = UDim2.new(1, 0, 0, 22)
-    topRow.Position = UDim2.new(0, 0, 0, 22)
+    topRow.Size = UDim2.new(1, 0, 0, 18)
+    topRow.Position = UDim2.new(0, 0, 0, 17)
     topRow.BackgroundTransparency = 1
     topRow.ZIndex = 12
 
     progressPct = Instance.new("TextLabel", topRow)
-    progressPct.Size = UDim2.new(0.4, 0, 1, 0)
-    progressPct.Position = UDim2.new(0, 12, 0, 0)
+    progressPct.Size = UDim2.new(0.3, 0, 1, 0)
+    progressPct.Position = UDim2.new(0, 10, 0, 0)
     progressPct.BackgroundTransparency = 1
     progressPct.Text = "0%"
     progressPct.TextColor3 = Color3.fromRGB(255,255,255)
     progressPct.Font = Enum.Font.GothamBlack
-    progressPct.TextSize = 14
+    progressPct.TextSize = 12
     progressPct.TextXAlignment = Enum.TextXAlignment.Left
     progressPct.TextStrokeColor3 = Color3.fromRGB(0,0,0)
     progressPct.TextStrokeTransparency = 0.2
@@ -7184,13 +7496,14 @@ function buildGui()
 
     local fpsNeon = Instance.new("TextLabel", topRow)
     fpsNeon.Name = "FPSNeon"
-    fpsNeon.Size = UDim2.new(0.2, 0, 1, 0)
-    fpsNeon.Position = UDim2.new(0.4, 0, 0, 0)
+    fpsNeon.Size = UDim2.new(0.4, 0, 1, 0)
+    fpsNeon.AnchorPoint = Vector2.new(1, 0)
+    fpsNeon.Position = UDim2.new(1, -10, 0, 0)
     fpsNeon.BackgroundTransparency = 1
     fpsNeon.Text = "--FPS · --ms"
     fpsNeon.TextColor3 = getThemeColor()
     fpsNeon.Font = Enum.Font.GothamBold
-    fpsNeon.TextSize = 12
+    fpsNeon.TextSize = 10
     fpsNeon.TextScaled = true
     fpsNeon.TextXAlignment = Enum.TextXAlignment.Center
     fpsNeon.TextStrokeColor3 = Color3.fromRGB(0,0,0)
@@ -7217,8 +7530,8 @@ function buildGui()
     end)
 
     local progressRow = Instance.new("Frame", pbFrame)
-    progressRow.Size = UDim2.new(1, -16, 0, 16)
-    progressRow.Position = UDim2.new(0, 8, 0, 48)
+    progressRow.Size = UDim2.new(1, -20, 0, 12)
+    progressRow.Position = UDim2.new(0, 10, 0, 39)
     progressRow.BackgroundTransparency = 1
     progressRow.ZIndex = 11
 
@@ -7320,8 +7633,8 @@ function createMobilePanel()
 
     local BTN_W, BTN_H = 60, 60
     local GAP = 8
-    local COLUMNS = 2
-    local ROWS = 5
+    local COLUMNS = 3
+    local ROWS = 4
     local PANEL_W = BTN_W * COLUMNS + GAP * (COLUMNS - 1)
     local PANEL_H = BTN_H * ROWS + (GAP + 10) * (ROWS - 1)
 
@@ -7348,9 +7661,9 @@ function createMobilePanel()
 
     local SILVER = Color3.fromRGB(180, 180, 190)
     local WHITE = Color3.fromRGB(255, 255, 255)
-    local INACTIVE_BG = Color3.fromRGB(10,10,10)
-    local INACTIVE_TEXT = Color3.fromRGB(225,225,225)
-    local STROKE_COLOR = Color3.fromRGB(70,70,70)
+    local INACTIVE_BG = Color3.fromRGB(36,22,56)
+    local INACTIVE_TEXT = Color3.fromRGB(252,247,255)
+    local STROKE_COLOR = Color3.fromRGB(196,159,245)
     local ACTIVE_BG = getThemeColor()
     local ACTIVE_TEXT = WHITE
 
@@ -7398,7 +7711,7 @@ function createMobilePanel()
         end
 
         local stroke = Instance.new("UIStroke", btn)
-        stroke.Color = Color3.fromRGB(120,120,128)
+        stroke.Color = STROKE_COLOR
         stroke.Thickness = 1
         stroke.Transparency = 0.55
         stroke.Name = "NormalStroke"
@@ -7418,15 +7731,7 @@ function createMobilePanel()
         local function setActive(state)
             active = state
             btn:SetAttribute("MobActive", state and true or false)
-            if name == "InstaReset" then
-                btn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-                local lbl = btn:FindFirstChild("TextLabel")
-                if lbl then
-                    lbl.TextColor3 = state and Color3.fromRGB(255,255,255) or Color3.fromRGB(200,200,200)
-                end
-            else
-                paintFloatingBtn(btn, state)
-            end
+            paintFloatingBtn(btn, state)
         end
         setActive(false)
 
@@ -7723,7 +8028,7 @@ function createTpBatFloatingButton()
     btnFrame.BackgroundTransparency = 0
     btnFrame.BorderSizePixel = 0
     btnFrame.ZIndex = 20
-    Instance.new("UICorner", btnFrame).CornerRadius = UDim.new(0, 18)
+    Instance.new("UICorner", btnFrame).CornerRadius = UDim.new(0, 12)
     local bgGrad = Instance.new("UIGradient", btnFrame)
     bgGrad.Name = "BtnGrad"
     bgGrad.Rotation = 90
@@ -7755,6 +8060,7 @@ function createTpBatFloatingButton()
         label.Text = "TP\nBAT"
         paintFloatingBtn(btnFrame, state)
     end
+    setActive(batDesyncTpEnabled)
 
     local dragging = false; local hasMoved = false; local dragStart, startPos
     btnFrame.InputBegan:Connect(function(inp)
@@ -7786,6 +8092,7 @@ function createTpBatFloatingButton()
                         YScale = btnFrame.Position.Y.Scale,
                         YOffset = btnFrame.Position.Y.Offset
                     }
+                    task.defer(function() pcall(saveAllSettings) end)
                 end
                 dragging = false; hasMoved = false
             end
@@ -8285,9 +8592,9 @@ function updateUIFromLoaded()
     if savedProgressBarPos and pbFrame then
         pbFrame.Position = UDim2.new(
             savedProgressBarPos.XScale or 0.5,
-            savedProgressBarPos.XOffset or -200,
+            savedProgressBarPos.XOffset or -160,
             savedProgressBarPos.YScale or 1,
-            savedProgressBarPos.YOffset or -60
+            savedProgressBarPos.YOffset or -64
         )
     end
 
@@ -8450,7 +8757,7 @@ end
 
 MobilePanel = createMobilePanel()
 pcall(function() setMobileButtonsVisible(mobileButtonsVisible ~= false) end)
-tpBatFloatingButton = nil -- TP BAT is now inside NexusMobilePanel
+tpBatFloatingButton = nil -- TP BAT is part of the mobile button grid
 batV2FloatingButton = nil -- Bat V2 removed
 instaResetFloatingButton = nil -- Insta Reset inside mobile panel
 
