@@ -167,10 +167,10 @@ local function waitForCharReady(char, timeout)
     return true
 end
 
-NS = 60
+NS = 59
 CS = 29
-LAGGER_SPEED = 15
-LAGGER_CARRY_SPEED = 24.5
+LAGGER_SPEED = 30
+LAGGER_CARRY_SPEED = 15
 MEDUSA_COOLDOWN = 25
 BAT_AIMBOT_SPEED = 58
 BYPASS_AIMBOT_SPEED = 60
@@ -214,12 +214,6 @@ local CarrySystem = {
 
     _isCarrying = false,
     _lastCarryCheck = 0,
-
-    _lvBoost = nil,
-    _lvAtt = nil,
-    _blockedTime = 0,
-    _maxForce = 2200,
-    _freeForce = 500,
 
     _heartbeatConn = nil,
     _softStealScanner = nil,
@@ -268,68 +262,16 @@ function CarrySystem:isCarrying()
 end
 
 function CarrySystem:getActiveSpeed()
-    if self._state and (self._state.autoLeftEnabled or self._state.autoRightEnabled) then
-        return self.normalSpeed
-    end
-    if self.softStealEnabled then
-        local _, dist = self:getNearestSoftStealAnimal(self.softStealRadius)
-        local inRange = dist and dist <= self.softStealRadius
-        if inRange then
-            self.softStealLatched = true
-            return self.softStealSpeed
-        end
-        if self.softStealLatched and self:isCarrying() then
-            return self.softStealSpeed
-        else
-            self.softStealLatched = false
-        end
-    end
-    if self.laggerMode == 1 then return self.laggerSpeed end
-    if self.laggerMode == 2 then return self.laggerCarrySpeed end
-    if self.speedToggled then return self.carrySpeed end
-    return self.normalSpeed
+    if autoLeftEnabled or autoRightEnabled then return NS end
+    return getActiveMoveSpeed()
 end
 
 function CarrySystem:getStatus()
-    if self._state and (self._state.autoLeftEnabled or self._state.autoRightEnabled) then
-        return "NORMAL", self.normalSpeed
-    end
-    if self.softStealEnabled then
-        local _, dist = self:getNearestSoftStealAnimal(self.softStealRadius)
-        local inRange = dist and dist <= self.softStealRadius
-        if inRange or (self.softStealLatched and self:isCarrying()) then
-            return "AUTO CARRY", self.softStealSpeed
-        end
-    end
-    if self.laggerMode == 1 then return "LAGGER", self.laggerSpeed end
-    if self.laggerMode == 2 then return "LAGGER CARRY", self.laggerCarrySpeed end
-    if self.speedToggled then return "CARRY", self.carrySpeed end
-    return "NORMAL", self.normalSpeed
-end
-
-local function destroyLV()
-    if CarrySystem._lvBoost and CarrySystem._lvBoost.Parent then pcall(function() CarrySystem._lvBoost:Destroy() end) end
-    if CarrySystem._lvAtt and CarrySystem._lvAtt.Parent then pcall(function() CarrySystem._lvAtt:Destroy() end) end
-    CarrySystem._lvBoost = nil; CarrySystem._lvAtt = nil
-end
-
-local function setupLV(hrp)
-    if CarrySystem._lvBoost and CarrySystem._lvBoost.Parent == hrp then return end
-    destroyLV()
-    local att = Instance.new("Attachment"); att.Parent = hrp
-    local lv = Instance.new("LinearVelocity")
-    lv.Name = "CarryBoostLV"
-    lv.Attachment0 = att
-    lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
-    lv.PrimaryTangentAxis = _V3new(1,0,0)
-    lv.SecondaryTangentAxis = _V3new(0,0,1)
-    lv.MaxForce = CarrySystem._maxForce
-    lv.PlaneVelocity = Vector2.zero
-    lv.RelativeTo = Enum.ActuatorRelativeTo.World
-    lv.Parent = hrp
-    CarrySystem._lvAtt = att
-    CarrySystem._lvBoost = lv
-    pcall(function() hrp:SetNetworkOwner(LP) end)
+    if autoLeftEnabled or autoRightEnabled then return "NORMAL", NS end
+    if laggerToggled and speedMode then return "LAGGER CARRY", LAGGER_CARRY_SPEED end
+    if laggerToggled then return "LAGGER", LAGGER_SPEED end
+    if speedMode then return "CARRY", CS end
+    return "NORMAL", NS
 end
 
 function CarrySystem:scanSoftStealAnimals()
@@ -403,117 +345,32 @@ end
 function CarrySystem:updateMovement(dt)
     local char = LP.Character
     if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-
-    local speed = self:getActiveSpeed()
-    local moveDir = hum.MoveDirection
-    local moving = moveDir.Magnitude > 0.1
-
-    local wallNormalFlat = nil
-    if moving then
-        if not self._rayParams then
-            self._rayParams = _RayParams_new()
-            self._rayParams.FilterType = Enum.RaycastFilterType.Exclude
-            self._rayFilter = {}
-            self._rayFilterTime = 0
-        end
-        local now = _tick()
-        if now - self._rayFilterTime > 1 then
-            self._rayFilterTime = now
-            local filter = self._rayFilter
-            while #filter > 0 do filter[#filter] = nil end
-            filter[1] = char
-            local plist = _GetPlayersCached()
-            for i = 1, #plist do
-                local p = plist[i]
-                if p.Character then
-                    filter[#filter + 1] = p.Character
-                end
-            end
-            self._rayParams.FilterDescendantsInstances = filter
-        else
-            local filter = self._rayFilter
-            local found = false
-            for i = 1, #filter do
-                if filter[i] == char then found = true; break end
-            end
-            if not found then
-                filter[1] = char
-                self._rayParams.FilterDescendantsInstances = filter
-            end
-        end
-        local flatDir = _V3new(moveDir.X, 0, moveDir.Z).Unit
-        local hit = Workspace:Raycast(hrp.Position + _V3new(0,1,0), flatDir * 2.5, self._rayParams)
-        if hit and hit.Instance and hit.Instance.CanCollide then
-            local nf = _V3new(hit.Normal.X, 0, hit.Normal.Z)
-            if nf.Magnitude > 0.7 then wallNormalFlat = nf.Unit end
-        end
-    end
-
-    local hVel = _V3new(hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
-    local blocked = wallNormalFlat ~= nil or (moving and hVel.Magnitude < 2)
-
-    if blocked then
-        for _, model in ipairs(char:GetChildren()) do
-            if model:IsA("Model") then
-                for _, part in ipairs(model:GetDescendants()) do
-                    if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
-                end
-            end
-        end
-        for _, name in ipairs({"Carrying","IsCarrying","Grabbed","Holding","StealHold","HasGrab"}) do
-            local v = char:FindFirstChild(name)
-            if v and v:IsA("ObjectValue") and v.Value and v.Value:IsA("Model") then
-                for _, part in ipairs(v.Value:GetDescendants()) do
-                    if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
-                end
-            end
-        end
-    end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp then return end
+    if autoBatEnabled or autoLeftEnabled or autoRightEnabled
+       or autoBatV2Enabled or batDesyncTpEnabled then return end
 
     local state = hum:GetState()
-    local ragdolled = state == Enum.HumanoidStateType.Physics
-                   or state == Enum.HumanoidStateType.Ragdoll
-                   or state == Enum.HumanoidStateType.FallingDown
-    local moverBlocked = ragdolled or self._dropInProgress or self._batAimbotToggled
+    if hum.PlatformStand or state == Enum.HumanoidStateType.Physics
+       or state == Enum.HumanoidStateType.Ragdoll then
+        lastMoveDir = _V3zero
+        return
+    end
 
-    if not moverBlocked then
-        if not CarrySystem._lvBoost or CarrySystem._lvBoost.Parent ~= hrp then setupLV(hrp) end
-        local lv = CarrySystem._lvBoost
-        if lv then
-            if not lv.Enabled then lv.Enabled = true end
-            if moveDir.Magnitude > 0.1 then
-                local flat = _V3new(moveDir.X, 0, moveDir.Z).Unit
-                if wallNormalFlat then
-                    local wanted = flat * speed
-                    local along = wanted - wallNormalFlat * wanted:Dot(wallNormalFlat)
-                    if along.Magnitude < 0.5 then
-                        lv.PlaneVelocity = Vector2.zero
-                    else
-                        lv.PlaneVelocity = Vector2.new(along.X, along.Z)
-                    end
-                else
-                    lv.PlaneVelocity = Vector2.new(flat.X * speed, flat.Z * speed)
-                end
-            else
-                lv.PlaneVelocity = Vector2.zero
-            end
-            if blocked then
-                self._blockedTime = self._blockedTime + (dt or 0.016)
-            else
-                self._blockedTime = 0
-            end
-            if self._blockedTime > 0.35 then
-                if lv.MaxForce ~= self._freeForce then lv.MaxForce = self._freeForce end
-            elseif lv.MaxForce ~= self._maxForce then
-                lv.MaxForce = self._maxForce
-            end
+    local moveDir = hum.MoveDirection
+    local speed = self:getActiveSpeed()
+    if moveDir.Magnitude > 0 then
+        lastMoveDir = moveDir
+        hrp.Velocity = _V3new(moveDir.X * speed, hrp.Velocity.Y, moveDir.Z * speed)
+    elseif antiRagdollMode ~= "off" and lastMoveDir.Magnitude > 0 then
+        local anyHeld = false
+        for key in pairs(MOVE_KEYS) do
+            if UIS:IsKeyDown(key) then anyHeld = true; break end
         end
-    elseif CarrySystem._lvBoost then
-        CarrySystem._lvBoost.PlaneVelocity = Vector2.zero
-        if CarrySystem._lvBoost.Enabled then CarrySystem._lvBoost.Enabled = false end
+        if anyHeld then
+            hrp.Velocity = _V3new(lastMoveDir.X * speed, hrp.Velocity.Y, lastMoveDir.Z * speed)
+        end
     end
 end
 
@@ -530,15 +387,30 @@ function CarrySystem:stop()
         self._heartbeatConn = nil
     end
     self:stopSoftStealScanner()
-    destroyLV()
     self.softStealLatched = false
     print("[CarrySystem] Desactivado")
 end
 
-function CarrySystem:setNormalSpeed(v) self.normalSpeed = _clamp(v,1,500) end
-function CarrySystem:setCarrySpeed(v) self.carrySpeed = _clamp(v,1,500) end
-function CarrySystem:setLaggerSpeed(v) self.laggerSpeed = _clamp(v,0.1,500) end
-function CarrySystem:setLaggerCarrySpeed(v) self.laggerCarrySpeed = _clamp(v,0.1,500) end
+function CarrySystem:setNormalSpeed(v)
+    NS = _clamp(v,1,500); self.normalSpeed = NS
+    if normalBox then normalBox.Text = tostring(NS) end
+    if carrySysNormalBox then carrySysNormalBox.Text = tostring(NS) end
+end
+function CarrySystem:setCarrySpeed(v)
+    CS = _clamp(v,1,500); self.carrySpeed = CS
+    if carryBox then carryBox.Text = tostring(CS) end
+    if carrySysCarryBox then carrySysCarryBox.Text = tostring(CS) end
+end
+function CarrySystem:setLaggerSpeed(v)
+    LAGGER_SPEED = _clamp(v,0.1,500); self.laggerSpeed = LAGGER_SPEED
+    if laggerBox then laggerBox.Text = tostring(LAGGER_SPEED) end
+    if carrySysLaggerBox then carrySysLaggerBox.Text = tostring(LAGGER_SPEED) end
+end
+function CarrySystem:setLaggerCarrySpeed(v)
+    LAGGER_CARRY_SPEED = _clamp(v,0.1,500); self.laggerCarrySpeed = LAGGER_CARRY_SPEED
+    if lagger2Box then lagger2Box.Text = tostring(LAGGER_CARRY_SPEED) end
+    if carrySysLaggerCarryBox then carrySysLaggerCarryBox.Text = tostring(LAGGER_CARRY_SPEED) end
+end
 function CarrySystem:setSoftStealSpeed(v) self.softStealSpeed = _clamp(v,1,500) end
 function CarrySystem:setSoftStealRadius(v) self.softStealRadius = _clamp(v,1,200) end
 
@@ -1169,6 +1041,7 @@ function applyOutfitByIndex(index)
 end
 
 speedMode = false
+autoSwitchSpeedEnabled = false
 antiRagdollMode = "off"
 antiDieEnabled = false
 antiFlingEnabled = false
@@ -1317,7 +1190,7 @@ local function claimOwnership(root)
 end
 
 function getActiveMoveSpeed()
-    if laggerCarryToggled then return LAGGER_CARRY_SPEED
+    if laggerToggled and speedMode then return LAGGER_CARRY_SPEED
     elseif laggerToggled then return LAGGER_SPEED
     elseif speedMode then return CS
     else return NS end
@@ -1380,34 +1253,55 @@ if LP.Character then
 end
 
 local function _isRagdollState(hum)
-    if not hum then return true end
+    if not hum then return false end
+    if hum.PlatformStand then return true end
     local st = hum:GetState()
-    return hum.PlatformStand
-        or st == Enum.HumanoidStateType.Physics
+    return st == Enum.HumanoidStateType.Physics
         or st == Enum.HumanoidStateType.Ragdoll
-        or st == Enum.HumanoidStateType.FallingDown
 end
 
 local function _applyVelocitySpeed(dir, speed, hrp)
-    if not hrp or not hrp.Parent then return end
+    if not hrp or not hrp.Parent or not dir or dir.Magnitude <= 0 then return end
     if autoBatV2Enabled or batDesyncTpEnabled or autoBatEnabled then return end
-    if dir and dir.Magnitude > 0.05 then
-        pcall(function()
-            if hrp.SetNetworkOwner then hrp:SetNetworkOwner(LP) end
-        end)
-        local unit = dir.Unit
-        local vy = hrp.AssemblyLinearVelocity.Y
-        hrp.AssemblyLinearVelocity = _V3new(unit.X * speed, vy, unit.Z * speed)
-    else
-        local vy = hrp.AssemblyLinearVelocity.Y
-        hrp.AssemblyLinearVelocity = _V3new(0, vy, 0)
-    end
+    local unit = dir.Unit
+    local vy = hrp.Velocity.Y
+    hrp.Velocity = _V3new(unit.X * speed, vy, unit.Z * speed)
 end
 
 function getAutoPathSpeed()
-    if laggerCarryToggled or laggerToggled then return LAGGER_SPEED end
+    -- Auto Left / Right use Normal Speed regardless of Carry or Lagger mode.
     return NS
 end
+
+local _autoSwitchWasSteal = false
+function updateAutoSwitchSpeed()
+    if not autoSwitchSpeedEnabled then return end
+    local char = LP.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local isStealSpeed = hum.WalkSpeed < 25
+    if isStealSpeed == _autoSwitchWasSteal then return end
+    _autoSwitchWasSteal = isStealSpeed
+    speedMode = isStealSpeed
+    laggerCarryToggled = laggerToggled and speedMode
+    if useCarrySystem then
+        CarrySystem.speedToggled = speedMode
+        CarrySystem:setLaggerMode(laggerCarryToggled and 2 or (laggerToggled and 1 or 0))
+    end
+    if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+    if mobSetCarry then mobSetCarry(speedMode) end
+    if mobSetLagger1 then mobSetLagger1(laggerToggled) end
+    if mobSetLagger2 then mobSetLagger2(laggerCarryToggled) end
+    if saveAllSettings then saveAllSettings() end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        pcall(updateAutoSwitchSpeed)
+    end
+end)
 
 ANIM_PACKS = {
     ["Zombie"] = { idle1="rbxassetid://616158929", idle2="rbxassetid://616160636", walk="rbxassetid://616168032", run="rbxassetid://616163682", jump="rbxassetid://616161997", fall="rbxassetid://616157476", climb="rbxassetid://616156119", swim="rbxassetid://616165109", swimidle="rbxassetid://616166655" },
@@ -2231,6 +2125,7 @@ setJumpToggleState = nil
 autoBatSetVisual, autoLeftSetVisual, autoRightSetVisual, setBatCounterVisual, setMedusaVisual = nil, nil, nil, nil, nil
 setAntiRagVisual, setJumpVisual, setUnwalkVisual, setAntiLagVisual, setLockUIVisual, setInstaGrab = nil, nil, nil, nil, nil, nil
 setAntiDieVisual = nil
+autoSwitchSpeedSetVisual = nil
 setEditModeVisual = nil
 setESPVIsual = nil
 mobSetAutoBat, mobSetAutoLeft, mobSetAutoRight, mobSetDropBR, mobSetTpDown, mobSetCarry, mobSetLagger1, mobSetLagger2 = nil, nil, nil, nil, nil, nil, nil, nil
@@ -3242,7 +3137,7 @@ end
 
 function refreshSpeedModeLabel()
     if modeValLbl then
-        if laggerCarryToggled then modeValLbl.Text = "Lagger Carry"
+        if laggerToggled and speedMode then modeValLbl.Text = "Lagger+Carry"
         elseif laggerToggled then modeValLbl.Text = "Lagger"
         elseif speedMode then modeValLbl.Text = "Carry"
         else modeValLbl.Text = "Normal" end
@@ -3253,45 +3148,39 @@ function refreshSpeedModeLabel()
 end
 
 function resetMovementState()
+    laggerCarryToggled = laggerToggled and speedMode
+    if useCarrySystem then
+        CarrySystem.speedToggled = speedMode
+        CarrySystem:setLaggerMode(laggerCarryToggled and 2 or (laggerToggled and 1 or 0))
+    end
     refreshSpeedModeLabel()
     if mobSetCarry then mobSetCarry(speedMode) end
+    if mobSetLagger1 then mobSetLagger1(laggerToggled) end
+    if mobSetLagger2 then mobSetLagger2(laggerCarryToggled) end
     if setLaggerModeVisual then setLaggerModeVisual(laggerToggled) end
     if setLaggerCarryVisual then setLaggerCarryVisual(laggerCarryToggled) end
+    if saveAllSettings then saveAllSettings() end
 end
 
 function toggleCarryMode()
-    if laggerToggled or laggerCarryToggled then
-        laggerToggled = false; laggerCarryToggled = false; speedMode = true
-    else speedMode = not speedMode end
+    if laggerToggled then laggerToggled = false end
+    speedMode = not speedMode
     resetMovementState()
 end
 
 function toggleLaggerMode()
-    if laggerCarryToggled then laggerCarryToggled = false end
-    speedMode = false; laggerToggled = not laggerToggled
+    laggerToggled = not laggerToggled
     resetMovementState()
 end
 function toggleLaggerCarryMode()
-    if laggerToggled then laggerToggled = false end
-    speedMode = false; laggerCarryToggled = not laggerCarryToggled
+    local enable = not (laggerToggled and speedMode)
+    laggerToggled = enable
+    speedMode = enable
     resetMovementState()
 end
 
 function toggleLaggerCycle()
-    if speedMode then
-        speedMode = false
-        laggerToggled = true
-        laggerCarryToggled = false
-    elseif laggerToggled then
-        speedMode = false
-        laggerToggled = false
-        laggerCarryToggled = true
-    else
-        speedMode = true
-        laggerToggled = false
-        laggerCarryToggled = false
-    end
-    resetMovementState()
+    toggleLaggerMode()
 end
 
 function stopAutoLeft()
@@ -3333,18 +3222,18 @@ function startAutoLeft()
                 local d = AP.L2 - root.Position
                 local mv = _V3new(d.X, 0, d.Z).Unit
                 hum:Move(mv, false)
-                root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+                root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
                 return
             end
             local d = AP.L1 - root.Position
             local mv = _V3new(d.X, 0, d.Z).Unit
             hum:Move(mv, false)
-            root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+            root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
         elseif alPhase == 2 then
             local tgt = _V3new(AP.L2.X, root.Position.Y, AP.L2.Z)
             if (tgt - root.Position).Magnitude < 1 then
                 hum:Move(_V3zero, false)
-                root.AssemblyLinearVelocity = _V3zero
+                root.Velocity = _V3zero
                 autoLeftEnabled = false
                 if alConn then alConn:Disconnect(); alConn = nil end
                 alPhase = 1
@@ -3360,7 +3249,7 @@ function startAutoLeft()
             local d = AP.L2 - root.Position
             local mv = _V3new(d.X, 0, d.Z).Unit
             hum:Move(mv, false)
-            root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+            root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
         end
     end)
 end
@@ -3404,18 +3293,18 @@ function startAutoRight()
                 local d = AP.R2 - root.Position
                 local mv = _V3new(d.X, 0, d.Z).Unit
                 hum:Move(mv, false)
-                root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+                root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
                 return
             end
             local d = AP.R1 - root.Position
             local mv = _V3new(d.X, 0, d.Z).Unit
             hum:Move(mv, false)
-            root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+            root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
         elseif arPhase == 2 then
             local tgt = _V3new(AP.R2.X, root.Position.Y, AP.R2.Z)
             if (tgt - root.Position).Magnitude < 1 then
                 hum:Move(_V3zero, false)
-                root.AssemblyLinearVelocity = _V3zero
+                root.Velocity = _V3zero
                 autoRightEnabled = false
                 if arConn then arConn:Disconnect(); arConn = nil end
                 arPhase = 1
@@ -3431,7 +3320,7 @@ function startAutoRight()
             local d = AP.R2 - root.Position
             local mv = _V3new(d.X, 0, d.Z).Unit
             hum:Move(mv, false)
-            root.AssemblyLinearVelocity = _V3new(mv.X * spd, root.AssemblyLinearVelocity.Y, mv.Z * spd)
+            root.Velocity = _V3new(mv.X * spd, root.Velocity.Y, mv.Z * spd)
         end
     end)
 end
@@ -5009,38 +4898,41 @@ function setupMovementAndIndicators(char)
         end
     end)
 
-    movementLoop = RunService.RenderStepped:Connect(function()
+    movementLoop = RunService.Heartbeat:Connect(function()
         local char2 = LP.Character
         if not char2 then return end
         local hum = char2:FindFirstChildOfClass("Humanoid")
         local hrp = char2:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return end
+        if _isRagdollState(hum) then
+            lastMoveDir = _V3zero
+            return
+        end
+        if autoBatEnabled or autoLeftEnabled or autoRightEnabled
+           or autoBatV2Enabled or batDesyncTpEnabled then return end
 
-        if not autoBatEnabled and not autoLeftEnabled and not autoRightEnabled
-           and not autoBatV2Enabled and not batDesyncTpEnabled then
-            if _isRagdollState(hum) then
-                lastMoveDir = _V3zero
-            else
-                local md = hum.MoveDirection
-                local spd = getActiveMoveSpeed()
-                local dir = nil
-                if md.Magnitude > 0 then
-                    lastMoveDir = md
-                    dir = md
-                elseif lastMoveDir.Magnitude > 0 then
-                    for key in pairs(MOVE_KEYS) do
-                        if UIS:IsKeyDown(key) then dir = lastMoveDir; break end
-                    end
+        if not useCarrySystem then
+            local moveDir = hum.MoveDirection
+            local speed = getActiveMoveSpeed()
+            if moveDir.Magnitude > 0 then
+                lastMoveDir = moveDir
+                _applyVelocitySpeed(moveDir, speed, hrp)
+            elseif antiRagdollMode ~= "off" and lastMoveDir.Magnitude > 0 then
+                local anyHeld = false
+                for key in pairs(MOVE_KEYS) do
+                    if UIS:IsKeyDown(key) then anyHeld = true; break end
                 end
-                _applyVelocitySpeed(dir, spd, hrp)
+                if anyHeld then
+                    _applyVelocitySpeed(lastMoveDir, speed, hrp)
+                end
             end
         end
 
         if speedLabel then
-            local v = hrp.AssemblyLinearVelocity
-            local s = _sqrt(v.X*v.X + v.Z*v.Z)
-            if s < 0.05 then s = 0 end
-            speedLabel.Text = "Speed: " .. string.format("%.1f", s)
+            local velocity = hrp.Velocity
+            local horizontalSpeed = _sqrt(velocity.X * velocity.X + velocity.Z * velocity.Z)
+            if horizontalSpeed < 0.05 then horizontalSpeed = 0 end
+            speedLabel.Text = "Speed: " .. string.format("%.1f", horizontalSpeed)
         end
     end)
     setupSpeedIndicator(char)
@@ -5147,6 +5039,7 @@ function buildConfigTable()
         laggerToggled = laggerToggled,
         laggerCarryToggled = laggerCarryToggled,
         carryMode = speedMode,
+        autoCarrySwitch = autoSwitchSpeedEnabled,
         batAimbotSpeed = BAT_AIMBOT_SPEED,
         dropMode = dropMode,
         stretchEnabled = stretchEnabled,
@@ -5268,6 +5161,13 @@ function loadAllSettings()
     laggerToggled = data.laggerToggled or false
     speedMode = data.carryMode or false
     laggerCarryToggled = data.laggerCarryToggled or false
+    autoSwitchSpeedEnabled = data.autoCarrySwitch == true
+    if laggerCarryToggled then
+        laggerToggled = true
+        speedMode = true
+    else
+        laggerCarryToggled = laggerToggled and speedMode
+    end
 
     uiScaleValue = 78
     if mainUIScale then mainUIScale.Scale = uiScaleValue / 100 end
@@ -5386,19 +5286,16 @@ function loadAllSettings()
     end
 
     useCarrySystem = data.useCarrySystem or false
-    CarrySystem.normalSpeed = data.carrySysNormal or NS
-    CarrySystem.carrySpeed = data.carrySysCarry or CS
-    CarrySystem.laggerSpeed = data.carrySysLagger or LAGGER_SPEED
-    CarrySystem.laggerCarrySpeed = data.carrySysLaggerCarry or LAGGER_CARRY_SPEED
+    CarrySystem.normalSpeed = NS
+    CarrySystem.carrySpeed = CS
+    CarrySystem.laggerSpeed = LAGGER_SPEED
+    CarrySystem.laggerCarrySpeed = LAGGER_CARRY_SPEED
     CarrySystem.softStealSpeed = data.carrySysSoftStealSpeed or 30
     CarrySystem.softStealRadius = data.carrySysSoftStealRadius or 10
     if useCarrySystem then
         CarrySystem:start()
         CarrySystem.speedToggled = speedMode
-        if laggerToggled then
-        else
-            CarrySystem:setLaggerMode(0)
-        end
+        CarrySystem:setLaggerMode(laggerCarryToggled and 2 or (laggerToggled and 1 or 0))
     else
         CarrySystem:stop()
     end
@@ -5439,6 +5336,7 @@ function forceResetUI()
     safeSet(setMedusaVisual, false)
     safeSet(setUnwalkVisual, false)
     safeSet(setAntiLagVisual, false)
+    safeSet(autoSwitchSpeedSetVisual, false)
     safeSet(setLockUIVisual, false)
     safeSet(setEditModeVisual, false)
     safeSet(setInstaGrab, false)
@@ -5586,14 +5484,15 @@ function resetToFactoryDefaults()
             AntiFlingShieldModule.stop()
             antiFlingEnabled = false
         end
-        NS = 60
+        NS = 59
         CS = 29
-        LAGGER_SPEED = 15
-        LAGGER_CARRY_SPEED = 24.5
+        LAGGER_SPEED = 30
+        LAGGER_CARRY_SPEED = 15
         CONFIG.STEAL_RANGE = 61
         speedMode = false
         laggerToggled = false
         laggerCarryToggled = false
+        autoSwitchSpeedEnabled = false
         antiRagdollMode = "off"
         antiDieEnabled = false
         antiFlingEnabled = false
@@ -6489,10 +6388,10 @@ function buildGui()
 
     local speedPage = contentPages["Speed"]
     mkSect(speedPage, "Speed Settings")
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Normal Speed"); normalBox = mkBox(row, NS, 50, 56, function(v) if v > 0 and v <= 500 then NS = v end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Carry Speed"); carryBox = mkBox(row, CS, 50, 56, function(v) if v > 0 and v <= 500 then CS = v end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger 1 Speed"); laggerBox = mkBox(row, LAGGER_SPEED, 50, 56, function(v) if v > 0 and v <= 500 then LAGGER_SPEED = v end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger 2 Speed"); lagger2Box = mkBox(row, LAGGER_CARRY_SPEED, 50, 56, function(v) if v > 0 and v <= 500 then LAGGER_CARRY_SPEED = v end end) end
+    do local row = mkRow(speedPage, 38); mkLabel(row, "Normal Speed"); normalBox = mkBox(row, NS, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setNormalSpeed(v); saveAllSettings() end end) end
+    do local row = mkRow(speedPage, 38); mkLabel(row, "Carry Speed"); carryBox = mkBox(row, CS, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setCarrySpeed(v); saveAllSettings() end end) end
+    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger Speed"); laggerBox = mkBox(row, LAGGER_SPEED, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerSpeed(v); saveAllSettings() end end) end
+    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger + Carry Speed"); lagger2Box = mkBox(row, LAGGER_CARRY_SPEED, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerCarrySpeed(v); saveAllSettings() end end) end
     do
         local row = mkRow(speedPage, 38)
         mkLabel(row, "Current Mode")
@@ -6515,6 +6414,14 @@ function buildGui()
         clk.MouseButton1Click:Connect(function() toggleCarryMode() end)
     end
 
+    mkSect(speedPage, "Speed Modes")
+    setCarryModeVisual = mkToggle(speedPage, "Carry Mode", function(on)
+        if speedMode ~= on then toggleCarryMode() end
+    end)
+    setLaggerModeVisual = mkToggle(speedPage, "Lagger Mode", function(on)
+        if laggerToggled ~= on then toggleLaggerMode() end
+    end)
+
     mkSect(speedPage, "Auto Movement")
     autoLeftSetVisual = mkToggle(speedPage, "Auto Left", function(on)
         autoLeftEnabled = on
@@ -6525,6 +6432,12 @@ function buildGui()
         autoRightEnabled = on
         if on then startAutoRight() else stopAutoRight() end
         if mobSetAutoRight then mobSetAutoRight(on) end
+    end)
+    mkSect(speedPage, "Auto Carry")
+    autoSwitchSpeedSetVisual = mkToggle(speedPage, "Auto Carry on Steal", function(on)
+        autoSwitchSpeedEnabled = on == true
+        if autoSwitchSpeedEnabled then pcall(updateAutoSwitchSpeed) end
+        saveAllSettings()
     end)
 
     mkSect(speedPage, "TP & Reset")
@@ -6556,27 +6469,12 @@ function buildGui()
         if on then
             CarrySystem:start()
             CarrySystem.speedToggled = speedMode
-            if laggerToggled then
-            else
-                CarrySystem:setLaggerMode(0)
-            end
-            CarrySystem:setSoftStealEnabled(true)
+            CarrySystem:setLaggerMode(laggerCarryToggled and 2 or (laggerToggled and 1 or 0))
         else
             CarrySystem:stop()
-            CarrySystem:setSoftStealEnabled(false)
         end
         saveAllSettings()
     end)
-
-    mkSect(speedPage, "Auto Carry Speeds")
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Normal Speed"); carrySysNormalBox = mkBox(row, CarrySystem.normalSpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setNormalSpeed(v); saveAllSettings() end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Carry Speed"); carrySysCarryBox = mkBox(row, CarrySystem.carrySpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setCarrySpeed(v); saveAllSettings() end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger Speed"); carrySysLaggerBox = mkBox(row, CarrySystem.laggerSpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerSpeed(v); saveAllSettings() end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger Carry Spd"); carrySysLaggerCarryBox = mkBox(row, CarrySystem.laggerCarrySpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerCarrySpeed(v); saveAllSettings() end end) end
-
-    mkSect(speedPage, "Soft Steal Settings")
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Soft Steal Speed"); carrySysSoftStealSpeedBox = mkBox(row, CarrySystem.softStealSpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setSoftStealSpeed(v); saveAllSettings() end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Soft Steal Radius"); carrySysSoftStealRadiusBox = mkBox(row, CarrySystem.softStealRadius, 50, 56, function(v) if v > 0 then CarrySystem:setSoftStealRadius(v); saveAllSettings() end end) end
 
     local combatPage = contentPages["Combat"]
 
@@ -7845,36 +7743,15 @@ function createMobilePanel()
             end
         elseif name == "Carry" then
             callback = function(setActive)
-                if not speedMode then
-                    speedMode = true; laggerToggled = false; laggerCarryToggled = false; setActive(true)
-                    if buttons.Lagger1 and buttons.Lagger1.setActive then buttons.Lagger1.setActive(false) end
-                    if buttons.Lagger2 and buttons.Lagger2.setActive then buttons.Lagger2.setActive(false) end
-                else
-                    speedMode = false; setActive(false)
-                end
-                refreshSpeedModeLabel()
+                toggleCarryMode()
             end
         elseif name == "Lagger1" then
             callback = function(setActive)
-                if speedMode then speedMode = false; if mobSetCarry then mobSetCarry(false) end end
-                if not laggerToggled then
-                    laggerToggled = true; laggerCarryToggled = false; setActive(true)
-                    if buttons.Lagger2 and buttons.Lagger2.setActive then buttons.Lagger2.setActive(false) end
-                else
-                    laggerToggled = false; setActive(false)
-                end
-                refreshSpeedModeLabel()
+                toggleLaggerMode()
             end
         elseif name == "Lagger2" then
             callback = function(setActive)
-                if speedMode then speedMode = false; if mobSetCarry then mobSetCarry(false) end end
-                if not laggerCarryToggled then
-                    laggerCarryToggled = true; laggerToggled = false; setActive(true)
-                    if buttons.Lagger1 and buttons.Lagger1.setActive then buttons.Lagger1.setActive(false) end
-                else
-                    laggerToggled = false; setActive(false)
-                end
-                refreshSpeedModeLabel()
+                toggleLaggerCarryMode()
             end
         elseif name == "InstaReset" then
             callback = function(setActive)
@@ -8581,6 +8458,7 @@ function updateUIFromLoaded()
     if carrySysSoftStealSpeedBox then carrySysSoftStealSpeedBox.Text = tostring(CarrySystem.softStealSpeed) end
     if carrySysSoftStealRadiusBox then carrySysSoftStealRadiusBox.Text = tostring(CarrySystem.softStealRadius) end
     if carrySystemToggleSetter then carrySystemToggleSetter(useCarrySystem) end
+    if autoSwitchSpeedSetVisual then autoSwitchSpeedSetVisual(autoSwitchSpeedEnabled) end
     refreshSpeedModeLabel()
 
     for _, ref in ipairs(keyButtonRefs) do
@@ -8764,11 +8642,7 @@ instaResetFloatingButton = nil -- Insta Reset inside mobile panel
 if useCarrySystem then
     CarrySystem:start()
     CarrySystem.speedToggled = speedMode
-    if laggerToggled then
-    else
-        CarrySystem:setLaggerMode(0)
-    end
-    CarrySystem:setSoftStealEnabled(true)
+    CarrySystem:setLaggerMode(laggerCarryToggled and 2 or (laggerToggled and 1 or 0))
 end
 
 if LP.Character then
