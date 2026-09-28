@@ -1,6 +1,6 @@
 -- Cleanup previous instance so re-execute works on mobile
 pcall(function()
-    for _, name in ipairs({"Ballon", "BallonMobilePanel", "ZNxInc7", "ZNxInc7MobilePanel", "nexus", "NexusMobilePanel", "TpBatButton", "CLEAN HUB", "BloodHounds", "BloodHoundsMobilePanel"}) do
+    for _, name in ipairs({"ZNxInc7", "nexus", "NexusMobilePanel", "TpBatButton", "CLEAN HUB", "BloodHounds", "BloodHoundsMobilePanel"}) do
         local cg = game:GetService("CoreGui")
         local old = cg:FindFirstChild(name)
         if old then old:Destroy() end
@@ -176,7 +176,7 @@ BAT_AIMBOT_SPEED = 58
 BYPASS_AIMBOT_SPEED = 60
 MOBILE_PANEL_WIDTH = 128
 MOBILE_PANEL_HEIGHT = 294
-CONFIG_FILE = "Ballon.json"
+CONFIG_FILE = "ZNxInc7.json"
 BAT_V2_HIT_DIST = 4.5
 _isDraggingButton = false
 
@@ -237,7 +237,7 @@ local CarrySystem = {
 
 function CarrySystem:isCarrying()
     local now = _tick()
-    if now - (self._lastCarryCheck or 0) < 0.1 then
+    if now - (self._lastCarryCheck or 0) < 0.08 then
         return self._isCarrying
     end
     self._lastCarryCheck = now
@@ -252,14 +252,24 @@ function CarrySystem:isCarrying()
     local ok2, v2 = pcall(function() return char:GetAttribute("Stealing") end)
     if ok2 and v2 == true then byAttr = true end
     if not byAttr then
-        for _, name in ipairs({"Carrying","IsCarrying","Grabbed","Holding","StealHold","HasGrab"}) do
+        for _, name in ipairs({"Carrying","IsCarrying","Grabbed","Holding","StealHold","HasGrab","Steal","CarryingAnimal","HoldingAnimal"}) do
             local obj = char:FindFirstChild(name)
             if obj then
                 if (obj:IsA("BoolValue") and obj.Value) or
                    (obj:IsA("ObjectValue") and obj.Value) or
-                   (obj:IsA("StringValue") and obj.Value ~= "") then
+                   (obj:IsA("StringValue") and obj.Value ~= "") or
+                   obj:IsA("Model") or obj:IsA("Folder") then
                     byAttr = true; break
                 end
+            end
+        end
+    end
+    -- أي موديل ملتصق بالشخصية (حيوان/brainrot) = حمل
+    if not byAttr then
+        for _, ch in ipairs(char:GetChildren()) do
+            if ch:IsA("Model") and ch.Name ~= "Animate" then
+                local hasHRP = ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChildWhichIsA("BasePart")
+                if hasHRP then byAttr = true; break end
             end
         end
     end
@@ -271,21 +281,32 @@ function CarrySystem:getActiveSpeed()
     if self._state and (self._state.autoLeftEnabled or self._state.autoRightEnabled) then
         return self.normalSpeed
     end
+    -- Lagger modes have priority when active
+    if self.laggerMode == 1 then return self.laggerSpeed end
+    if self.laggerMode == 2 then return self.laggerCarrySpeed end
+
     if self.softStealEnabled then
+        local carrying = self:isCarrying()
+        if carrying then
+            -- وأنت شايل: Carry Speed (اللي بتغيّره من الـ UI) — مش softStealSpeed الثابت 30
+            self.softStealLatched = true
+            return self.carrySpeed
+        end
         local _, dist = self:getNearestSoftStealAnimal(self.softStealRadius)
         local inRange = dist and dist <= self.softStealRadius
         if inRange then
+            -- قرب المنصة بس لسه مش شايل: Soft Steal Speed
             self.softStealLatched = true
             return self.softStealSpeed
         end
-        if self.softStealLatched and self:isCarrying() then
-            return self.softStealSpeed
-        else
+        if self.softStealLatched then
+            -- latched من قبل لكن مش شايل ومش في الرينج → فكّ
             self.softStealLatched = false
         end
+    elseif self:isCarrying() then
+        return self.carrySpeed
     end
-    if self.laggerMode == 1 then return self.laggerSpeed end
-    if self.laggerMode == 2 then return self.laggerCarrySpeed end
+
     if self.speedToggled then return self.carrySpeed end
     return self.normalSpeed
 end
@@ -294,15 +315,20 @@ function CarrySystem:getStatus()
     if self._state and (self._state.autoLeftEnabled or self._state.autoRightEnabled) then
         return "NORMAL", self.normalSpeed
     end
-    if self.softStealEnabled then
-        local _, dist = self:getNearestSoftStealAnimal(self.softStealRadius)
-        local inRange = dist and dist <= self.softStealRadius
-        if inRange or (self.softStealLatched and self:isCarrying()) then
-            return "AUTO CARRY", self.softStealSpeed
-        end
-    end
     if self.laggerMode == 1 then return "LAGGER", self.laggerSpeed end
     if self.laggerMode == 2 then return "LAGGER CARRY", self.laggerCarrySpeed end
+    if self.softStealEnabled then
+        if self:isCarrying() then
+            return "AUTO CARRY", self.carrySpeed
+        end
+        local _, dist = self:getNearestSoftStealAnimal(self.softStealRadius)
+        local inRange = dist and dist <= self.softStealRadius
+        if inRange then
+            return "SOFT STEAL", self.softStealSpeed
+        end
+    elseif self:isCarrying() then
+        return "AUTO CARRY", self.carrySpeed
+    end
     if self.speedToggled then return "CARRY", self.carrySpeed end
     return "NORMAL", self.normalSpeed
 end
@@ -335,22 +361,36 @@ end
 function CarrySystem:scanSoftStealAnimals()
     self._softStealAnimals = {}
     local plots = Workspace:FindFirstChild("Plots")
+        or Workspace:FindFirstChild("Plot")
+        or Workspace:FindFirstChild("Tycoons")
+    if not plots then
+        -- fallback: دور على أي AnimalPodiums في الـ Workspace
+        for _, d in ipairs(Workspace:GetChildren()) do
+            if d:IsA("Folder") or d:IsA("Model") then
+                local podiums = d:FindFirstChild("AnimalPodiums")
+                if podiums then plots = d; break end
+            end
+        end
+    end
     if not plots then return end
     for _, plot in ipairs(plots:GetChildren()) do
-        if plot:IsA("Model") then
-            local podiums = plot:FindFirstChild("AnimalPodiums")
+        if plot:IsA("Model") or plot:IsA("Folder") then
+            local podiums = plot:FindFirstChild("AnimalPodiums") or plot:FindFirstChild("Podiums") or plot:FindFirstChild("Animals")
             if podiums then
                 for _, podium in ipairs(podiums:GetChildren()) do
-                    if podium:IsA("Model") then
-                        local base = podium:FindFirstChild("Base")
-                        local spawn = base and base:FindFirstChild("Spawn")
+                    if podium:IsA("Model") or podium:IsA("Folder") then
+                        local base = podium:FindFirstChild("Base") or podium
+                        local spawn = (base and (base:FindFirstChild("Spawn") or base:FindFirstChild("AnimalSpawn") or base:FindFirstChildWhichIsA("BasePart"))) or podium:FindFirstChildWhichIsA("BasePart")
                         if spawn then
-                            table.insert(self._softStealAnimals, {
-                                plot = plot.Name,
-                                slot = podium.Name,
-                                worldPosition = spawn.Position,
-                                uid = plot.Name .. "_" .. podium.Name,
-                            })
+                            local pos = spawn:IsA("BasePart") and spawn.Position or (spawn:IsA("Attachment") and spawn.WorldPosition)
+                            if pos then
+                                table.insert(self._softStealAnimals, {
+                                    plot = plot.Name,
+                                    slot = podium.Name,
+                                    worldPosition = pos,
+                                    uid = plot.Name .. "_" .. podium.Name,
+                                })
+                            end
                         end
                     end
                 end
@@ -363,8 +403,12 @@ function CarrySystem:startSoftStealScanner()
     if self._softStealScanner then return end
     self._softStealScanning = true
     self:scanSoftStealAnimals()
-    self._softStealScanner = RunService.Heartbeat:Connect(function()
+    local acc = 0
+    self._softStealScanner = RunService.Heartbeat:Connect(function(dt)
         if not self._softStealScanning then return end
+        acc = acc + (dt or 0.016)
+        if acc < 0.5 then return end -- كل نص ثانية مش كل فريم
+        acc = 0
         self:scanSoftStealAnimals()
     end)
 end
@@ -536,10 +580,14 @@ function CarrySystem:stop()
 end
 
 function CarrySystem:setNormalSpeed(v) self.normalSpeed = _clamp(v,1,500) end
-function CarrySystem:setCarrySpeed(v) self.carrySpeed = _clamp(v,1,500) end
+function CarrySystem:setCarrySpeed(v)
+    self.carrySpeed = _clamp(tonumber(v) or self.carrySpeed, 1, 500)
+end
 function CarrySystem:setLaggerSpeed(v) self.laggerSpeed = _clamp(v,0.1,500) end
 function CarrySystem:setLaggerCarrySpeed(v) self.laggerCarrySpeed = _clamp(v,0.1,500) end
-function CarrySystem:setSoftStealSpeed(v) self.softStealSpeed = _clamp(v,1,500) end
+function CarrySystem:setSoftStealSpeed(v)
+    self.softStealSpeed = _clamp(tonumber(v) or self.softStealSpeed, 1, 500)
+end
 function CarrySystem:setSoftStealRadius(v) self.softStealRadius = _clamp(v,1,200) end
 
 function CarrySystem:toggleCarryMode() self.speedToggled = not self.speedToggled end
@@ -3250,6 +3298,20 @@ function refreshSpeedModeLabel()
     if setCarryModeVisual then setCarryModeVisual(speedMode) end
     if setLaggerModeVisual then setLaggerModeVisual(laggerToggled) end
     if setLaggerCarryVisual then setLaggerCarryVisual(laggerCarryToggled) end
+    -- مزامنة مع CarrySystem عشان Auto Carry يشتغل
+    if useCarrySystem then
+        CarrySystem.speedToggled = speedMode == true
+        if laggerCarryToggled then
+            CarrySystem:setLaggerMode(2)
+        elseif laggerToggled then
+            CarrySystem:setLaggerMode(1)
+        else
+            CarrySystem:setLaggerMode(0)
+        end
+        if not CarrySystem:isRunning() then
+            CarrySystem:start()
+        end
+    end
 end
 
 function resetMovementState()
@@ -3466,6 +3528,30 @@ function getClosestTarget()
     return closest
 end
 
+-- صوت الضرب بالـ Bat
+BAT_HIT_SOUND_ID = "rbxassetid://12222208"
+batHitSoundEnabled = true
+local _lastBatHitSoundT = 0
+
+function playBatHitSound()
+    if not batHitSoundEnabled then return end
+    local now = tick()
+    if now - _lastBatHitSoundT < 0.08 then return end
+    _lastBatHitSoundT = now
+    pcall(function()
+        local char = LP.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head"))
+        local s = Instance.new("Sound")
+        s.SoundId = BAT_HIT_SOUND_ID
+        s.Volume = 1.2
+        s.PlaybackSpeed = 1 + (math.random() * 0.15 - 0.05)
+        s.RollOffMaxDistance = 80
+        s.Parent = root or workspace.CurrentCamera or workspace
+        s:Play()
+        game:GetService("Debris"):AddItem(s, 2)
+    end)
+end
+
 function trySwing()
     pcall(function()
         local char = LP.Character
@@ -3479,6 +3565,7 @@ function trySwing()
                 if hum then pcall(function() hum:EquipTool(bat) end) end
             end
             pcall(function() bat:Activate() end)
+            playBatHitSound()
         end
     end)
 end
@@ -3643,6 +3730,7 @@ local function tryHitBatV2()
             else
                 pcall(function() tool:Activate() end)
             end
+            playBatHitSound()
         end
     end
     task.delay(AUTO_BAT_V2_SWING_CD, function()
@@ -3804,6 +3892,7 @@ local function tryHitBatDesync()
             bat:Activate()
             local ev = bat:FindFirstChildWhichIsA("RemoteEvent")
             if ev then ev:FireServer() end
+            playBatHitSound()
         end
     end)
     task.delay(0.08, function() hittingCooldownDesync = false end)
@@ -4275,12 +4364,16 @@ function swingBatForCounter(bat, character)
     local remote = bat:FindFirstChildOfClass("RemoteEvent") or bat:FindFirstChildOfClass("RemoteFunction")
     if remote and remote:IsA("RemoteEvent") then
         pcall(function() remote:FireServer() end)
+        playBatHitSound()
         task.wait(0.1)
         pcall(function() remote:FireServer() end)
+        playBatHitSound()
     else
         pcall(function() bat:Activate() end)
+        playBatHitSound()
         task.wait(0.1)
         pcall(function() bat:Activate() end)
+        playBatHitSound()
     end
 end
 
@@ -4594,6 +4687,183 @@ function disableAntiLag()
     antiLagEnabled = false
     if antiLagDescConn then antiLagDescConn:Disconnect(); antiLagDescConn = nil end
 end
+
+-- LOW GRAPHICS + TOOL SKIN
+potatoGraphicsEnabled = false
+local potatoGraphicsActive = false
+local potatoGraphicsDescConn = nil
+local function _applyPotatoObj(arg)
+    local parent = arg
+    while parent do
+        local n = tostring(parent.Name)
+        if n == "LocalReplica" or n == "TutorialArrow" then return end
+        parent = parent.Parent
+    end
+    pcall(function()
+        if arg:IsA("BasePart") then
+            arg.Material = Enum.Material.Plastic
+            arg.Reflectance = 0
+            arg.CastShadow = false
+            if arg:IsA("MeshPart") then pcall(function() arg.TextureID = "" end) end
+        elseif arg:IsA("Decal") or arg:IsA("Texture") or arg:IsA("ParticleEmitter") or arg:IsA("Trail") or arg:IsA("Beam") then
+            if arg:IsA("Decal") or arg:IsA("Texture") then arg:Destroy() else arg.Enabled = false end
+        end
+    end)
+end
+function enablePotatoGraphics()
+    if potatoGraphicsActive then return end
+    potatoGraphicsActive = true
+    potatoGraphicsEnabled = true
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+    pcall(function()
+        Lighting.GlobalShadows = false
+        Lighting.Brightness = 1
+        Lighting.FogEnd = 9e9
+    end)
+    task.spawn(function()
+        local n = 0
+        for _, d in ipairs(Workspace:GetDescendants()) do
+            if not potatoGraphicsActive then return end
+            _applyPotatoObj(d)
+            n = n + 1
+            if n % 350 == 0 then task.wait() end
+        end
+    end)
+    if potatoGraphicsDescConn then potatoGraphicsDescConn:Disconnect() end
+    potatoGraphicsDescConn = Workspace.DescendantAdded:Connect(function(d)
+        if potatoGraphicsActive then _applyPotatoObj(d) end
+    end)
+end
+function disablePotatoGraphics()
+    potatoGraphicsActive = false
+    potatoGraphicsEnabled = false
+    if potatoGraphicsDescConn then potatoGraphicsDescConn:Disconnect(); potatoGraphicsDescConn = nil end
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
+end
+
+toolSkinEnabled = false
+local TOOL_SKIN_ASSETS = {
+    StarWand = { cat = "Bat", label = "Star Wand", mesh = "rbxassetid://99775819417718", tex = "rbxassetid://98445209461118", scale = Vector3.new(3.6, 0.3, 3.6), c0 = CFrame.new(-0.3, -0.3, 0) },
+    Keyblade = { cat = "Bat", label = "Keyblade", mesh = "rbxassetid://10324542258", tex = "rbxassetid://10324548131", scale = Vector3.new(1.4, 1.4, 1.4), c0 = CFrame.new(-0.05, -0.1, -0.12) * CFrame.Angles(math.rad(90), math.rad(180), math.rad(300)) },
+    Katana = { cat = "Bat", label = "Katana", mesh = "rbxassetid://13528902482", tex = "rbxassetid://13528902373", scale = Vector3.new(1.4, 1.4, 1.4), c0 = CFrame.new(0, 0.6, 0) * CFrame.Angles(math.rad(270), math.rad(180), math.rad(180)) },
+    BanHammer = { cat = "Bat", label = "Ban Hammer", mesh = "rbxassetid://10468701", tex = "rbxassetid://10468700", scale = Vector3.new(1, 1, 1), c0 = CFrame.new(0, -0.8, 0) * CFrame.Angles(math.rad(-90), 0, 0) },
+    ClassicBat = { cat = "Bat", label = "Classic Bat", mesh = "rbxassetid://47694792", tex = "rbxassetid://47694780", scale = Vector3.new(1, 1, 1), c0 = CFrame.new(0, -0.5, 0) * CFrame.Angles(math.rad(-90), 0, 0) },
+    Skull = { cat = "Medusa", label = "Skull", mesh = "rbxassetid://2050312704", tex = "rbxassetid://2050313393", scale = Vector3.new(1, 1, 1), c0 = CFrame.new(0, -0.3, -0.4) * CFrame.Angles(0.2, 0, 0) },
+}
+local toolSkinSelection = { Bat = "StarWand", Medusa = "Skull" }
+local _tsTracked = setmetatable({}, { __mode = "k" })
+local _tsParentWatch = setmetatable({}, { __mode = "k" })
+local toolSkinSelectorLabel = nil
+local BAT_SKIN_ORDER = { "StarWand", "Keyblade", "Katana", "BanHammer", "ClassicBat" }
+local function _tsIsWeaponTool(tool)
+    if not tool or not tool:IsA("Tool") then return nil end
+    local n = tool.Name:lower()
+    if n:find("bat") or n:find("slap") or n:find("sword") then return "Bat" end
+    if n:find("medusa") or n:find("stone") then return "Medusa" end
+    return nil
+end
+local function _tsCreateReplica(handle, skinKey)
+    local cfg = TOOL_SKIN_ASSETS[skinKey] or TOOL_SKIN_ASSETS.StarWand
+    local old = handle:FindFirstChild("LocalReplica")
+    if old then pcall(function() old:Destroy() end) end
+    local model = Instance.new("Model")
+    model.Name = "LocalReplica"
+    local part = Instance.new("Part")
+    part.Name = "MainPart"
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Massless = true
+    part.Size = Vector3.new(1, 1, 1)
+    part.Transparency = 0
+    part.Parent = model
+    local mesh = Instance.new("SpecialMesh")
+    mesh.MeshType = Enum.MeshType.FileMesh
+    mesh.MeshId = cfg.mesh
+    mesh.TextureId = cfg.tex or ""
+    mesh.Scale = cfg.scale
+    mesh.Parent = part
+    local motor = Instance.new("Motor6D")
+    motor.Part0 = handle
+    motor.Part1 = part
+    motor.C0 = cfg.c0
+    motor.Parent = part
+    model.Parent = handle
+end
+local function _tsApplyTool(tool)
+    if not toolSkinEnabled then return end
+    local cat = _tsIsWeaponTool(tool)
+    if not cat or _tsTracked[tool] then return end
+    local handle = tool:FindFirstChild("Handle")
+    if not handle then return end
+    local state = { hidden = {}, conns = {}, cat = cat }
+    _tsTracked[tool] = state
+    _tsCreateReplica(handle, toolSkinSelection[cat] or "StarWand")
+    for _, d in ipairs(tool:GetDescendants()) do
+        if not (handle:FindFirstChild("LocalReplica") and d:IsDescendantOf(handle:FindFirstChild("LocalReplica"))) then
+            if d:IsA("BasePart") or d:IsA("Decal") or d:IsA("Texture") then
+                state.hidden[d] = d.Transparency
+                d.Transparency = 1
+            end
+        end
+    end
+    table.insert(state.conns, tool.AncestryChanged:Connect(function(_, p)
+        if not p then
+            for obj, t in pairs(state.hidden) do pcall(function() if obj.Parent then obj.Transparency = t end end) end
+            local h = tool:FindFirstChild("Handle")
+            if h and h:FindFirstChild("LocalReplica") then h.LocalReplica:Destroy() end
+            _tsTracked[tool] = nil
+        end
+    end))
+end
+local function _tsScan(container)
+    if not container then return end
+    for _, ch in ipairs(container:GetChildren()) do if ch:IsA("Tool") then _tsApplyTool(ch) end end
+end
+local function _tsWatch(container)
+    if not container or _tsParentWatch[container] then return end
+    _tsParentWatch[container] = container.ChildAdded:Connect(function(ch)
+        if toolSkinEnabled and ch:IsA("Tool") then _tsApplyTool(ch) end
+    end)
+    _tsScan(container)
+end
+function enableToolSkin()
+    toolSkinEnabled = true
+    _tsWatch(LP:FindFirstChildOfClass("Backpack"))
+    _tsWatch(LP.Character)
+    _tsScan(LP:FindFirstChildOfClass("Backpack"))
+    _tsScan(LP.Character)
+end
+function disableToolSkin()
+    toolSkinEnabled = false
+    for tool, state in pairs(_tsTracked) do
+        for obj, t in pairs(state.hidden or {}) do pcall(function() if obj.Parent then obj.Transparency = t end end) end
+        local h = tool and tool:FindFirstChild("Handle")
+        if h and h:FindFirstChild("LocalReplica") then pcall(function() h.LocalReplica:Destroy() end) end
+        _tsTracked[tool] = nil
+    end
+end
+function setBatToolSkin(name)
+    if not TOOL_SKIN_ASSETS[name] or TOOL_SKIN_ASSETS[name].cat ~= "Bat" then return end
+    toolSkinSelection.Bat = name
+    if toolSkinSelectorLabel then toolSkinSelectorLabel.Text = TOOL_SKIN_ASSETS[name].label end
+    if toolSkinEnabled then
+        for tool, state in pairs(_tsTracked) do
+            if state.cat == "Bat" then
+                local h = tool:FindFirstChild("Handle")
+                if h then _tsCreateReplica(h, name) end
+            end
+        end
+    end
+    pcall(saveAllSettings)
+end
+LP.CharacterAdded:Connect(function(char)
+    if not toolSkinEnabled then return end
+    task.defer(function()
+        task.wait(0.15)
+        if toolSkinEnabled then _tsWatch(char); _tsScan(char); _tsWatch(LP:FindFirstChildOfClass("Backpack")) end
+    end)
+end)
 
 CUSTOM_FOV_BIND = "CleanHubCustomFOV"
 
@@ -5016,6 +5286,18 @@ function setupMovementAndIndicators(char)
         local hrp = char2:FindFirstChild("HumanoidRootPart")
         if not hum or not hrp then return end
 
+        -- لما Auto Carry شغال، CarrySystem هو اللي بيحرك — متبقاش السرعة القديمة تلغيه
+        if useCarrySystem and CarrySystem:isRunning() then
+            if speedLabel then
+                local v = hrp.AssemblyLinearVelocity
+                local s = _sqrt(v.X*v.X + v.Z*v.Z)
+                if s < 0.05 then s = 0 end
+                local _, targetSpd = CarrySystem:getStatus()
+                speedLabel.Text = string.format("Speed: %.1f (AC %.0f)", s, targetSpd or 0)
+            end
+            return
+        end
+
         if not autoBatEnabled and not autoLeftEnabled and not autoRightEnabled
            and not autoBatV2Enabled and not batDesyncTpEnabled then
             if _isRagdollState(hum) then
@@ -5157,6 +5439,9 @@ function buildConfigTable()
         animPack = currentAnimPack,
         espEnabled = espEnabled,
         antiLag = antiLagEnabled,
+        potatoGraphics = potatoGraphicsEnabled,
+        toolSkinEnabled = toolSkinEnabled,
+        toolSkinBat = toolSkinSelection.Bat,
         tpBatEnabled = batDesyncTpEnabled,
         neonWeather = neonWeatherEnabled,
         skyTheme = skyTheme,
@@ -5265,6 +5550,9 @@ function loadAllSettings()
     batCounterV2Enabled = data.batCounterV2 or false
     unwalkEnabled = data.unwalk or false
     antiLagEnabled = data.antiLag or false
+    potatoGraphicsEnabled = data.potatoGraphics or false
+    toolSkinEnabled = data.toolSkinEnabled or false
+    if data.toolSkinBat and TOOL_SKIN_ASSETS[data.toolSkinBat] then toolSkinSelection.Bat = data.toolSkinBat end
     laggerToggled = data.laggerToggled or false
     speedMode = data.carryMode or false
     laggerCarryToggled = data.laggerCarryToggled or false
@@ -5874,13 +6162,13 @@ function buildGui()
     local STROKE_COLOR = Color3.fromRGB(50,50,50)
     local GUI_W, GUI_H = 330, 480
 
-    local old = game:GetService("CoreGui"):FindFirstChild("Ballon") or game:GetService("CoreGui"):FindFirstChild("ZNxInc7") or game:GetService("CoreGui"):FindFirstChild("nexus") or game:GetService("CoreGui"):FindFirstChild("CLEAN HUB") or game:GetService("CoreGui"):FindFirstChild("BloodHounds")
+    local old = game:GetService("CoreGui"):FindFirstChild("ZNxInc7") or game:GetService("CoreGui"):FindFirstChild("nexus") or game:GetService("CoreGui"):FindFirstChild("CLEAN HUB") or game:GetService("CoreGui"):FindFirstChild("BloodHounds")
     if old then old:Destroy() end
     local pg = LP:FindFirstChild("PlayerGui")
-    if pg then for _,n in ipairs({"Ballon","ZNxInc7","nexus","CLEAN HUB","BloodHounds"}) do local o=pg:FindFirstChild(n); if o then o:Destroy() end end end
+    if pg then for _,n in ipairs({"ZNxInc7","nexus","CLEAN HUB","BloodHounds"}) do local o=pg:FindFirstChild(n); if o then o:Destroy() end end end
 
     gui = Instance.new("ScreenGui")
-    gui.Name = "Ballon"
+    gui.Name = "ZNxInc7"
     gui.ResetOnSpawn = false
     gui.DisplayOrder = 10
     gui.IgnoreGuiInset = true
@@ -5910,7 +6198,7 @@ function buildGui()
     local titleLbl = Instance.new("TextLabel", titleFrame)
     titleLbl.Size = UDim2.new(1, 0, 1, 0)
     titleLbl.BackgroundTransparency = 1
-    titleLbl.Text = "Ballon"
+    titleLbl.Text = "ZNxInc7"
     titleLbl.TextColor3 = WHITE
     titleLbl.Font = Enum.Font.GothamBlack
     titleLbl.TextSize = 18
@@ -5940,18 +6228,24 @@ function buildGui()
     end)
 
     miniBtn = Instance.new("TextButton", gui)
-    miniBtn.Size = UDim2.new(0, 118, 0, 30)
+    miniBtn.Name = "ZNxInc7Logo"
+    miniBtn.Size = UDim2.new(0, 52, 0, 52)
     miniBtn.Position = UDim2.new(0, 16, 0, 58)
     miniBtn.BackgroundColor3 = BG2
     miniBtn.BackgroundTransparency = 0
     miniBtn.BorderSizePixel = 0
-    miniBtn.Text = "Ballon"
+    miniBtn.Text = "ZN"
     miniBtn.TextColor3 = selectedColor
-    miniBtn.Font = Enum.Font.GothamBold
-    miniBtn.TextSize = 12
+    miniBtn.Font = Enum.Font.GothamBlack
+    miniBtn.TextSize = 16
     miniBtn.ZIndex = 20
     miniBtn.Visible = false
-    Instance.new("UICorner", miniBtn).CornerRadius = UDim.new(0, 8)
+    miniBtn.AutoButtonColor = false
+    Instance.new("UICorner", miniBtn).CornerRadius = UDim.new(1, 0)
+    local miniStroke = Instance.new("UIStroke", miniBtn)
+    miniStroke.Color = selectedColor
+    miniStroke.Thickness = 2
+    miniStroke.Transparency = 0.15
     applyShimmerToText(miniBtn, 0.9)
 
     local slideTween = nil
@@ -6570,7 +6864,7 @@ function buildGui()
 
     mkSect(speedPage, "Auto Carry Speeds")
     do local row = mkRow(speedPage, 38); mkLabel(row, "Normal Speed"); carrySysNormalBox = mkBox(row, CarrySystem.normalSpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setNormalSpeed(v); saveAllSettings() end end) end
-    do local row = mkRow(speedPage, 38); mkLabel(row, "Carry Speed"); carrySysCarryBox = mkBox(row, CarrySystem.carrySpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setCarrySpeed(v); saveAllSettings() end end) end
+    do local row = mkRow(speedPage, 38); mkLabel(row, "Carry Speed"); carrySysCarryBox = mkBox(row, CarrySystem.carrySpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setCarrySpeed(v); CS = v; saveAllSettings() end end) end
     do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger Speed"); carrySysLaggerBox = mkBox(row, CarrySystem.laggerSpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerSpeed(v); saveAllSettings() end end) end
     do local row = mkRow(speedPage, 38); mkLabel(row, "Lagger Carry Spd"); carrySysLaggerCarryBox = mkBox(row, CarrySystem.laggerCarrySpeed, 50, 56, function(v) if v > 0 and v <= 500 then CarrySystem:setLaggerCarrySpeed(v); saveAllSettings() end end) end
 
@@ -7052,6 +7346,74 @@ function buildGui()
         if on then enableAntiLag() else disableAntiLag() end
     end)
 
+    setPotatoVisual = mkToggle(visualPage, "Low Graphics", function(on)
+        if on then enablePotatoGraphics() else disablePotatoGraphics() end
+        pcall(saveAllSettings)
+    end)
+
+    setToolSkinVisual = mkToggle(visualPage, "Tool Skin", function(on)
+        if on then enableToolSkin() else disableToolSkin() end
+        pcall(saveAllSettings)
+    end)
+
+    do
+        local row = mkRow(visualPage, 38)
+        mkLabel(row, "Bat Skin")
+        local container = Instance.new("Frame", row)
+        container.Size = UDim2.new(0, 160, 1, 0)
+        container.Position = UDim2.new(1, -168, 0, 0)
+        container.BackgroundTransparency = 1
+        container.ZIndex = 8
+        local leftBtn = Instance.new("TextButton", container)
+        leftBtn.Size = UDim2.new(0, 28, 0, 26)
+        leftBtn.Position = UDim2.new(0, 0, 0.5, -13)
+        leftBtn.BackgroundColor3 = INP
+        leftBtn.BackgroundTransparency = 0.7
+        leftBtn.BorderSizePixel = 0
+        leftBtn.Text = "<"
+        leftBtn.TextColor3 = WHITE
+        leftBtn.Font = Enum.Font.GothamBold
+        leftBtn.TextSize = 13
+        leftBtn.AutoButtonColor = false
+        leftBtn.ZIndex = 9
+        Instance.new("UICorner", leftBtn).CornerRadius = UDim.new(0, 6)
+        toolSkinSelectorLabel = Instance.new("TextLabel", container)
+        toolSkinSelectorLabel.Size = UDim2.new(0, 96, 0, 26)
+        toolSkinSelectorLabel.Position = UDim2.new(0.5, -48, 0.5, -13)
+        toolSkinSelectorLabel.BackgroundTransparency = 1
+        toolSkinSelectorLabel.Text = (TOOL_SKIN_ASSETS[toolSkinSelection.Bat] and TOOL_SKIN_ASSETS[toolSkinSelection.Bat].label) or "Star Wand"
+        toolSkinSelectorLabel.TextColor3 = WHITE
+        toolSkinSelectorLabel.Font = Enum.Font.GothamBold
+        toolSkinSelectorLabel.TextSize = 11
+        toolSkinSelectorLabel.TextXAlignment = Enum.TextXAlignment.Center
+        toolSkinSelectorLabel.ZIndex = 9
+        local rightBtn = Instance.new("TextButton", container)
+        rightBtn.Size = UDim2.new(0, 28, 0, 26)
+        rightBtn.Position = UDim2.new(1, -28, 0.5, -13)
+        rightBtn.BackgroundColor3 = INP
+        rightBtn.BackgroundTransparency = 0.7
+        rightBtn.BorderSizePixel = 0
+        rightBtn.Text = ">"
+        rightBtn.TextColor3 = WHITE
+        rightBtn.Font = Enum.Font.GothamBold
+        rightBtn.TextSize = 13
+        rightBtn.AutoButtonColor = false
+        rightBtn.ZIndex = 9
+        Instance.new("UICorner", rightBtn).CornerRadius = UDim.new(0, 6)
+        local function cycleBatSkin(dir)
+            local idx = 1
+            for i, n in ipairs(BAT_SKIN_ORDER) do
+                if n == toolSkinSelection.Bat then idx = i; break end
+            end
+            local ni = idx + dir
+            if ni < 1 then ni = #BAT_SKIN_ORDER end
+            if ni > #BAT_SKIN_ORDER then ni = 1 end
+            setBatToolSkin(BAT_SKIN_ORDER[ni])
+        end
+        leftBtn.MouseButton1Click:Connect(function() cycleBatSkin(-1) end)
+        rightBtn.MouseButton1Click:Connect(function() cycleBatSkin(1) end)
+    end
+
     do
         local row = mkRow(visualPage, 38)
         mkLabel(row, "Sky Theme")
@@ -7466,7 +7828,7 @@ function buildGui()
     discordLabelTop.Position = UDim2.new(0.5, 0, 0, 2)
     discordLabelTop.AnchorPoint = Vector2.new(0.5, 0)
     discordLabelTop.BackgroundTransparency = 1
-    discordLabelTop.Text = "Ballon · AUTO STEAL"
+    discordLabelTop.Text = "ZNxInc7 · AUTO STEAL"
     discordLabelTop.TextColor3 = getThemeColor()
     discordLabelTop.Font = Enum.Font.GothamBold
     discordLabelTop.TextSize = 10
@@ -7622,7 +7984,7 @@ end
 function createMobilePanel()
 
     local panel = Instance.new("ScreenGui")
-    panel.Name = "BallonMobilePanel"
+    panel.Name = "ZNxInc7MobilePanel"
     panel.ResetOnSpawn = false
     panel.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     panel.Enabled = true
@@ -7852,7 +8214,8 @@ function createMobilePanel()
                 else
                     speedMode = false; setActive(false)
                 end
-                refreshSpeedModeLabel()
+                refreshSpeedModeLabel() -- يحدّث CarrySystem.speedToggled
+                pcall(saveAllSettings)
             end
         elseif name == "Lagger1" then
             callback = function(setActive)
@@ -7864,6 +8227,7 @@ function createMobilePanel()
                     laggerToggled = false; setActive(false)
                 end
                 refreshSpeedModeLabel()
+                pcall(saveAllSettings)
             end
         elseif name == "Lagger2" then
             callback = function(setActive)
@@ -7872,9 +8236,10 @@ function createMobilePanel()
                     laggerCarryToggled = true; laggerToggled = false; setActive(true)
                     if buttons.Lagger1 and buttons.Lagger1.setActive then buttons.Lagger1.setActive(false) end
                 else
-                    laggerToggled = false; setActive(false)
+                    laggerCarryToggled = false; setActive(false)
                 end
                 refreshSpeedModeLabel()
+                pcall(saveAllSettings)
             end
         elseif name == "InstaReset" then
             callback = function(setActive)
@@ -8438,6 +8803,7 @@ local function tryHitBatCounterV2()
             bat:Activate()
             local ev = bat:FindFirstChildWhichIsA("RemoteEvent")
             if ev then ev:FireServer() end
+            playBatHitSound()
         end
     end)
     task.delay(BAT_COUNTER_V2_SWING_CD, function()
@@ -8662,6 +9028,14 @@ function updateUIFromLoaded()
     else
         if setAntiLagVisual then setAntiLagVisual(false) end
         disableAntiLag()
+    end
+    if potatoGraphicsEnabled then
+        if setPotatoVisual then setPotatoVisual(true) end
+        enablePotatoGraphics()
+    end
+    if toolSkinEnabled then
+        if setToolSkinVisual then setToolSkinVisual(true) end
+        enableToolSkin()
     end
     if espEnabled then
         toggleESP(true)
